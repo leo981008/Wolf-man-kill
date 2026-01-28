@@ -8,6 +8,32 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
+# 遊戲板子配置 (從 Wiki 獲取)
+GAME_TEMPLATES = {
+    6: [
+        {"name": "明牌局", "roles": ["狼人", "狼人", "預言家", "獵人", "平民", "平民"]},
+        {"name": "暗牌局", "roles": ["狼人", "狼人", "預言家", "守衛", "平民", "平民"]}
+    ],
+    7: [
+        {"name": "生還者", "roles": ["狼人", "白狼王", "預言家", "女巫", "獵人", "守衛", "平民"]}
+    ],
+    8: [
+        {"name": "諸神黃昏", "roles": ["狼王", "白狼王", "惡靈騎士", "預言家", "女巫", "獵人", "守衛", "白痴"]},
+        {"name": "末日狂徒", "roles": ["狼人", "狼人", "狼人", "預言家", "守衛", "騎士", "平民", "平民"]}
+    ],
+    9: [
+        {"name": "暗牌局", "roles": ["狼人", "狼人", "狼人", "預言家", "女巫", "獵人", "平民", "平民", "平民"]}
+    ],
+    10: [
+        {"name": "普通局", "roles": ["狼人", "狼人", "狼人", "預言家", "女巫", "獵人", "平民", "平民", "平民", "平民"]},
+        {"name": "白痴局", "roles": ["狼人", "狼人", "狼人", "預言家", "女巫", "獵人", "白痴", "平民", "平民", "平民"]}
+    ],
+    12: [
+        {"name": "預女獵白 標準板", "roles": ["狼人", "狼人", "狼人", "狼人", "預言家", "女巫", "獵人", "白痴", "平民", "平民", "平民", "平民"]},
+        {"name": "狼王守衛", "roles": ["狼人", "狼人", "狼人", "狼王", "預言家", "女巫", "獵人", "守衛", "平民", "平民", "平民", "平民"]}
+    ]
+}
+
 # 設定 Intent (權限)
 intents = discord.Intents.default()
 intents.members = True
@@ -64,20 +90,20 @@ async def start(ctx):
         await ctx.send("遊戲已經在進行中。")
         return
 
-    # 設定天神 (執行 !start 的人)
-    god = ctx.author
+    # 設定初始天神 (執行 !start 的人)
+    gods = [ctx.author]
 
     # 如果天神在玩家列表中，將其移除
-    if god in players:
-        players.remove(god)
-        await ctx.send(f"{god.mention} 已轉為天神 (God)，不參與遊戲。")
+    if ctx.author in players:
+        players.remove(ctx.author)
+        await ctx.send(f"{ctx.author.mention} 已轉為天神 (God)，不參與遊戲。")
 
-    player_count = len(players)
-    if player_count < 3:
+    current_player_count = len(players)
+    if current_player_count < 3:
         await ctx.send("人數不足，至少需要 3 人 (不含天神) 才能開始。")
         return
 
-    if player_count > 20:
+    if current_player_count > 20:
         await ctx.send("人數過多，本遊戲最多支援 20 人。")
         return
 
@@ -86,28 +112,56 @@ async def start(ctx):
     votes = {}
     voted_players = set()
 
-    # 分配身分規則 (最多 20 人)
-    # 3-5 人: 1 狼人
-    # 6-9 人: 2 狼人
-    # 10-14 人: 3 狼人
-    # 15-20 人: 4 狼人
-    if player_count <= 5:
+    role_pool = []
+    active_players = []
+    template_name = ""
+
+    # 判斷板子大小與選擇模板
+    if current_player_count < 6:
+        # 3-5 人：保留原有簡單邏輯
         werewolf_count = 1
-    elif player_count <= 9:
-        werewolf_count = 2
-    elif player_count <= 14:
-        werewolf_count = 3
+        seer_count = 1
+        villager_count = current_player_count - werewolf_count - seer_count
+
+        role_pool = ["狼人"] * werewolf_count + ["預言家"] * seer_count + ["平民"] * villager_count
+        template_name = f"{current_player_count}人 基礎局"
+        active_players = players.copy()
     else:
-        werewolf_count = 4
+        # 6人以上：使用 Wiki 板子
+        # 找出最接近且不超過目前人數的板子大小
+        supported_counts = sorted(GAME_TEMPLATES.keys(), reverse=True) # [12, 10, 9, 8, 7, 6]
+        target_count = 0
 
-    seer_count = 1
-    villager_count = player_count - werewolf_count - seer_count
+        for count in supported_counts:
+            if current_player_count >= count:
+                target_count = count
+                break
 
-    role_pool = ["狼人"] * werewolf_count + ["預言家"] * seer_count + ["村民"] * villager_count
+        # 處理多餘玩家 -> 轉為天神
+        # 洗牌確保隨機選出 active players
+        random.shuffle(players)
+
+        active_players = players[:target_count]
+        excess_players = players[target_count:]
+
+        # 更新全域 players 列表，移除 excess players
+        players[:] = active_players
+
+        for p in excess_players:
+            gods.append(p)
+            await ctx.send(f"{p.mention} 因人數超出板子 ({target_count}人)，自動轉為天神。")
+
+        # 隨機選擇板子
+        templates = GAME_TEMPLATES[target_count]
+        selected_template = random.choice(templates)
+        role_pool = selected_template["roles"].copy()
+        template_name = f"{target_count}人 {selected_template['name']}"
+
+    # 分配身分
     random.shuffle(role_pool)
 
     role_summary = []
-    for player, role in zip(players, role_pool):
+    for player, role in zip(active_players, role_pool):
         roles[player] = role
         role_summary.append(f"{player.name}: {role}")
 
@@ -117,15 +171,16 @@ async def start(ctx):
         except discord.Forbidden:
             await ctx.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
 
-    # 將所有身分發送給天神
-    try:
-        summary_msg = "**本局身分列表：**\n" + "\n".join(role_summary)
-        await god.send(summary_msg)
-        await ctx.send(f"遊戲開始！身分已發送給天神 {god.mention}，各位玩家請查看私訊。")
-    except discord.Forbidden:
-        await ctx.send(f"無法發送私訊給天神 {god.mention}，請檢查隱私設定。遊戲無法開始。")
-        game_active = False
-        return
+    # 通知所有天神
+    summary_msg = f"**本局板子：{template_name}**\n**本局身分列表：**\n" + "\n".join(role_summary)
+
+    for god in gods:
+        try:
+            await god.send(summary_msg)
+        except discord.Forbidden:
+            await ctx.send(f"無法發送私訊給天神 {god.mention}。")
+
+    await ctx.send(f"遊戲開始！使用板子：**{template_name}**。身分已發送給所有天神與玩家。")
 
     # 進入天黑 (禁言)
     await perform_night(ctx)
