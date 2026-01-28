@@ -65,7 +65,8 @@ class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
         found = any(call.args[0] == expected_msg for call in ctx.send.mock_calls)
         self.assertTrue(found, f"Message '{expected_msg}' not found in calls: {ctx.send.mock_calls}")
 
-    async def test_start_preserves_gods(self):
+    @patch('bot.perform_night', new_callable=AsyncMock)
+    async def test_start_preserves_gods(self, mock_night):
         ctx = MagicMock()
         ctx.author = MagicMock()
         ctx.author.name = "Host"
