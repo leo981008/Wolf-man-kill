@@ -1,5 +1,6 @@
 import os
 import random
+import asyncio
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -66,25 +67,199 @@ votes = {}
 voted_players = set()
 game_active = False
 
+# 新增：玩家編號與女巫藥水狀態
+player_ids = {}     # ID -> Member
+player_id_map = {}  # Member -> ID
+witch_potions = {'antidote': True, 'poison': True}
+
+def get_player_by_id(player_id):
+    """根據 ID 獲取玩家物件"""
+    try:
+        pid = int(player_id)
+        return player_ids.get(pid)
+    except ValueError:
+        return None
+
+def get_id_by_player(player):
+    """獲取玩家的 ID"""
+    return player_id_map.get(player)
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} 已上線！')
 
+async def request_dm_input(player, prompt, valid_check, timeout=45):
+    """私訊請求輸入的輔助函式"""
+    try:
+        await player.send(prompt)
+        def check(m):
+            return m.author == player and isinstance(m.channel, discord.DMChannel) and valid_check(m.content)
+
+        msg = await bot.wait_for('message', check=check, timeout=timeout)
+        return msg.content
+    except (asyncio.TimeoutError, discord.Forbidden):
+        return None
+
 async def perform_night(ctx):
-    """執行天黑邏輯"""
+    """執行天黑邏輯 (循序發送私訊)"""
+    # 1. 天黑禁言
     try:
         await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
-        await ctx.send("🌑 **天黑請閉眼。** 頻道已禁言。")
+        await ctx.send("🌑 **天黑請閉眼。** 夜晚行動開始，請留意私訊。")
     except discord.Forbidden:
         await ctx.send("權限不足，無法修改頻道權限。")
 
-async def perform_day(ctx):
+    # 驗證 ID 的輔助函式
+    def is_valid_id(content):
+        if content.strip().lower() == 'no': return True
+        try:
+            pid = int(content)
+            return pid in player_ids
+        except: return False
+
+    # 2. 守衛階段
+    guard_protect = None
+    guard = next((p for p, r in roles.items() if r == "守衛" and p in players), None)
+    if guard:
+        resp = await request_dm_input(guard, "🛡️ **守衛請睜眼。** 今晚要守護誰？請輸入玩家編號 (輸入 no 空守):", is_valid_id)
+        if resp and resp.lower() != 'no':
+            guard_protect = int(resp)
+            await guard.send(f"今晚守護了 {guard_protect} 號。")
+        else:
+            await guard.send("今晚不守護任何人。")
+
+    # 3. 狼人階段 (多數決)
+    wolf_kill = None
+    wolves = [p for p, r in roles.items() if r == "狼人" and p in players]
+    if wolves:
+        # 發送請求給所有狼人
+        tasks = []
+        for wolf in wolves:
+            tasks.append(request_dm_input(wolf, "🐺 **狼人請睜眼。** 今晚要殺誰？請輸入玩家編號 (輸入 no 放棄):", is_valid_id, timeout=60))
+
+        # 等待所有狼人回應 (或超時)
+        results = await asyncio.gather(*tasks)
+
+        # 統計票數
+        votes = []
+        for res in results:
+            if res and res.lower() != 'no':
+                try: votes.append(int(res))
+                except: pass
+
+        if votes:
+            from collections import Counter
+            counts = Counter(votes)
+            max_votes = counts.most_common(1)[0][1]
+            candidates = [k for k, v in counts.items() if v == max_votes]
+            wolf_kill = random.choice(candidates) # 平票隨機
+
+            # 通知狼人目標
+            for wolf in wolves:
+                try: await wolf.send(f"今晚狼隊鎖定目標：**{wolf_kill} 號**。")
+                except: pass
+        else:
+             for wolf in wolves:
+                try: await wolf.send("今晚狼隊沒有達成目標 (或棄刀)。")
+                except: pass
+
+    # 4. 女巫階段
+    witch_save = False
+    witch_poison = None
+    witch = next((p for p, r in roles.items() if r == "女巫" and p in players), None)
+    if witch:
+        # 解藥
+        if witch_potions['antidote']:
+            target_msg = f"今晚 {wolf_kill} 號玩家被殺了。" if wolf_kill else "今晚是平安夜。"
+            prompt = f"🔮 **女巫請睜眼。** {target_msg} 要使用解藥嗎？(輸入 yes/no)"
+            resp = await request_dm_input(witch, prompt, lambda c: c.strip().lower() in ['yes', 'y', 'no', 'n'])
+
+            if resp and resp.strip().lower() in ['yes', 'y'] and wolf_kill:
+                witch_save = True
+                witch_potions['antidote'] = False
+                await witch.send("已使用解藥。")
+            else:
+                await witch.send("未使用解藥。")
+        else:
+             # 解藥已用，僅通知資訊
+             target_msg = f"今晚 {wolf_kill} 號玩家被殺了。" if wolf_kill else "今晚是平安夜。"
+             await witch.send(f"🔮 **女巫請睜眼。** {target_msg} (解藥已用完)")
+
+        # 毒藥
+        if witch_potions['poison']:
+            prompt = "要使用毒藥嗎？請輸入玩家編號 (輸入 no 不使用):"
+            resp = await request_dm_input(witch, prompt, is_valid_id)
+            if resp and resp.strip().lower() != 'no':
+                witch_poison = int(resp)
+                witch_potions['poison'] = False
+                await witch.send(f"已對 {witch_poison} 號使用毒藥。")
+            else:
+                await witch.send("未使用毒藥。")
+
+    # 5. 預言家階段
+    seer = next((p for p, r in roles.items() if r == "預言家" and p in players), None)
+    if seer:
+        resp = await request_dm_input(seer, "🔮 **預言家請睜眼。** 今晚要查驗誰？請輸入玩家編號:", is_valid_id)
+        if resp and resp.strip().lower() != 'no':
+            target_id = int(resp)
+            target_obj = player_ids.get(target_id)
+            target_role = roles.get(target_obj, "未知") if target_obj else "未知"
+
+            # 判斷好人/壞人 (隱狼算好人)
+            is_bad = "狼" in target_role and target_role != "隱狼"
+            result = "狼人 (查殺)" if is_bad else "好人 (金水)"
+
+            await seer.send(f"{target_id} 號的身分是：**{result}**")
+        else:
+            await seer.send("今晚未查驗。")
+
+    # 結算死亡名單
+    dead_ids = set()
+
+    # 狼刀
+    if wolf_kill:
+        is_guarded = (wolf_kill == guard_protect)
+        is_saved = witch_save
+
+        if is_guarded and is_saved:
+            # 同守同救 -> 視為不死 (可根據規則調整)
+            pass
+        elif not is_guarded and not is_saved:
+            dead_ids.add(wolf_kill)
+
+    # 女巫毒
+    if witch_poison:
+        dead_ids.add(witch_poison)
+
+    # 轉換為玩家物件
+    dead_players_list = []
+    for did in dead_ids:
+        p = player_ids.get(did)
+        if p and p in players:
+            dead_players_list.append(p)
+
+    await perform_day(ctx, dead_players_list)
+
+async def perform_day(ctx, dead_players=[]):
     """執行天亮邏輯"""
     try:
         await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
-        await ctx.send("🌞 **天亮了！** 請開始討論。")
     except discord.Forbidden:
         await ctx.send("權限不足，無法修改頻道權限。請確認 Bot 擁有管理頻道權限。")
+
+    msg = "🌞 **天亮了！** 請開始討論。\n"
+    if dead_players:
+        names = ", ".join([p.name for p in dead_players])
+        msg += f"昨晚死亡的是：**{names}**"
+
+        # 移除死亡玩家
+        for p in dead_players:
+            if p in players:
+                players.remove(p)
+    else:
+        msg += "昨晚是平安夜。"
+
+    await ctx.send(msg)
 
 @bot.command()
 async def join(ctx):
@@ -119,7 +294,7 @@ async def god(ctx):
 @bot.command()
 async def start(ctx):
     """開始遊戲 (分配身分並進入天黑狀態)"""
-    global game_active, roles, voted_players, votes, gods
+    global game_active, roles, voted_players, votes, gods, player_ids, player_id_map, witch_potions
 
     if game_active:
         await ctx.send("遊戲已經在進行中。")
@@ -193,18 +368,32 @@ async def start(ctx):
         role_pool = selected_template["roles"].copy()
         template_name = f"{target_count}人 {selected_template['name']}"
 
-    # 分配身分
+    # 分配身分與編號
     random.shuffle(role_pool)
+
+    # 分配編號 (1~N)
+    player_ids = {}
+    player_id_map = {}
+    witch_potions = {'antidote': True, 'poison': True}
+
+    player_list_msg = "**本局玩家列表：**\n"
+    for idx, player in enumerate(active_players, 1):
+        player_ids[idx] = player
+        player_id_map[player] = idx
+        player_list_msg += f"**{idx}.** {player.name}\n"
+
+    await ctx.send(player_list_msg)
 
     role_summary = []
     for player, role in zip(active_players, role_pool):
         roles[player] = role
-        role_summary.append(f"{player.name}: {role}")
+        pid = player_id_map[player]
+        role_summary.append(f"{pid}. {player.name}: {role}")
 
         # 傳送身分給各個玩家
         try:
             description = ROLE_DESCRIPTIONS.get(role, "暫無說明")
-            msg = f"您的身分是：**{role}**\n\n**功能說明：**\n{description}"
+            msg = f"您的編號是：**{pid}**\n您的身分是：**{role}**\n\n**功能說明：**\n{description}"
             await player.send(msg)
         except discord.Forbidden:
             await ctx.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
@@ -218,7 +407,7 @@ async def start(ctx):
         except discord.Forbidden:
             await ctx.send(f"無法發送私訊給天神 {god.mention}。")
 
-    await ctx.send(f"遊戲開始！使用板子：**{template_name}**。身分已發送給所有天神與玩家。")
+    await ctx.send(f"遊戲開始！使用板子：**{template_name}**。身分與編號已發送給所有天神與玩家。")
 
     # 整理本局出現的角色功能說明
     unique_roles = set(role_pool)
@@ -253,16 +442,27 @@ async def night(ctx):
 
 @bot.command()
 async def die(ctx, *, target: str):
-    """天神指令：處決玩家"""
+    """天神指令：處決玩家 (輸入編號)"""
     if ctx.author not in gods:
         await ctx.send("只有天神 (God) 可以使用此指令。")
         return
 
     # 嘗試解析玩家
-    try:
-        target_member = await commands.MemberConverter().convert(ctx, target)
-    except commands.BadArgument:
-        await ctx.send(f"找不到玩家 `{target}`。")
+    target_member = None
+
+    # 1. 嘗試 ID
+    if target.isdigit():
+        target_member = player_ids.get(int(target))
+
+    # 2. 嘗試 Mention / Name
+    if not target_member:
+        try:
+            target_member = await commands.MemberConverter().convert(ctx, target)
+        except commands.BadArgument:
+            pass
+
+    if not target_member:
+        await ctx.send(f"找不到玩家 `{target}` (請輸入編號或名稱)。")
         return
 
     if target_member not in players:
@@ -347,10 +547,21 @@ async def vote(ctx, *, target: str):
         await ctx.send(f"{ctx.author.mention} 投了廢票 (Abstain)。")
     else:
         # 嘗試解析玩家
-        try:
-            target_member = await commands.MemberConverter().convert(ctx, target)
-        except commands.BadArgument:
-            await ctx.send(f"找不到玩家 `{target}`。")
+        target_member = None
+
+        # 1. 嘗試 ID
+        if target.isdigit():
+            target_member = player_ids.get(int(target))
+
+        # 2. 嘗試 Mention / Name
+        if not target_member:
+            try:
+                target_member = await commands.MemberConverter().convert(ctx, target)
+            except commands.BadArgument:
+                pass
+
+        if not target_member:
+            await ctx.send(f"找不到玩家 `{target}` (請輸入編號或名稱)。")
             return
 
         if target_member not in players:
@@ -372,7 +583,7 @@ async def vote(ctx, *, target: str):
 @bot.command()
 async def reset(ctx):
     """重置遊戲狀態"""
-    global players, roles, votes, voted_players, game_active, gods
+    global players, roles, votes, voted_players, game_active, gods, player_ids, player_id_map, witch_potions
 
     if game_active and ctx.author not in gods:
         await ctx.send("只有天神 (God) 才能在遊戲進行中重置遊戲。")
@@ -384,6 +595,11 @@ async def reset(ctx):
     votes = {}
     voted_players = set()
     game_active = False
+
+    # 重置新變數
+    player_ids = {}
+    player_id_map = {}
+    witch_potions = {'antidote': True, 'poison': True}
 
     # 恢復發言權限
     try:
