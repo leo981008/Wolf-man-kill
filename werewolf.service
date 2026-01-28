@@ -1,0 +1,16 @@
+[Unit]
+Description=Werewolf Discord Bot
+After=network.target
+
+[Service]
+# 修改 User 為您的 Raspberry Pi 使用者名稱 (通常是 'pi')
+User=pi
+# 修改 WorkingDirectory 為專案資料夾路徑
+WorkingDirectory=/home/pi/werewolf-bot
+# 指向虛擬環境中的 python 執行檔
+ExecStart=/home/pi/werewolf-bot/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
