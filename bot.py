@@ -59,8 +59,13 @@ async def join(ctx):
 async def start(ctx):
     """開始遊戲 (分配身分並進入天黑狀態)"""
     global game_active, roles, voted_players, votes
-    if len(players) < 3:
+    player_count = len(players)
+    if player_count < 3:
         await ctx.send("人數不足，至少需要 3 人才能開始。")
+        return
+
+    if player_count > 20:
+        await ctx.send("人數過多，本遊戲最多支援 20 人。")
         return
 
     if game_active:
@@ -72,8 +77,24 @@ async def start(ctx):
     votes = {}
     voted_players = set()
 
-    # 分配身分 (簡易版: 1 狼人, 1 預言家, 其餘村民)
-    role_pool = ["狼人", "預言家"] + ["村民"] * (len(players) - 2)
+    # 分配身分規則 (最多 20 人)
+    # 3-5 人: 1 狼人
+    # 6-9 人: 2 狼人
+    # 10-14 人: 3 狼人
+    # 15-20 人: 4 狼人
+    if player_count <= 5:
+        werewolf_count = 1
+    elif player_count <= 9:
+        werewolf_count = 2
+    elif player_count <= 14:
+        werewolf_count = 3
+    else:
+        werewolf_count = 4
+
+    seer_count = 1
+    villager_count = player_count - werewolf_count - seer_count
+
+    role_pool = ["狼人"] * werewolf_count + ["預言家"] * seer_count + ["村民"] * villager_count
     random.shuffle(role_pool)
 
     role_summary = []
