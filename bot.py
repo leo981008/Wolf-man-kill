@@ -201,6 +201,22 @@ async def start(ctx):
 
     await ctx.send(f"遊戲開始！使用板子：**{template_name}**。身分已發送給所有天神與玩家。")
 
+    # 整理本局出現的角色功能說明
+    unique_roles = set(role_pool)
+    role_help_msg = "**本局角色功能說明：**\n"
+
+    # 依照 ROLE_DESCRIPTIONS 定義的順序顯示，確保整齊
+    for role in ROLE_DESCRIPTIONS:
+        if role in unique_roles:
+            role_help_msg += f"**{role}**：{ROLE_DESCRIPTIONS[role]}\n"
+
+    # 如果有未知角色 (不在 ROLE_DESCRIPTIONS 中)，額外補上
+    for role in unique_roles:
+        if role not in ROLE_DESCRIPTIONS:
+            role_help_msg += f"**{role}**：暫無說明\n"
+
+    await ctx.send(role_help_msg)
+
     # 進入天黑 (禁言)
     await perform_night(ctx)
 
