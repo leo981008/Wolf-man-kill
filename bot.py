@@ -60,6 +60,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # 遊戲狀態
 players = []
+gods = []
 roles = {}
 votes = {}
 voted_players = set()
@@ -92,6 +93,9 @@ async def join(ctx):
         await ctx.send("遊戲已經開始，無法加入。")
         return
 
+    if ctx.author in gods:
+        gods.remove(ctx.author)
+
     if ctx.author in players:
         await ctx.send(f"{ctx.author.mention} 你已經在玩家列表中了。")
     else:
@@ -99,16 +103,33 @@ async def join(ctx):
         await ctx.send(f"{ctx.author.mention} 加入了遊戲！目前人數: {len(players)}")
 
 @bot.command()
+async def god(ctx):
+    """轉為天神 (不參與遊戲，觀戰模式)"""
+    if game_active:
+        await ctx.send("遊戲已經開始，無法轉為天神。")
+        return
+
+    if ctx.author in players:
+        players.remove(ctx.author)
+
+    if ctx.author not in gods:
+        gods.append(ctx.author)
+        await ctx.send(f"{ctx.author.mention} 已轉為天神 (God)。")
+    else:
+        await ctx.send(f"{ctx.author.mention} 你已經是天神了。")
+
+@bot.command()
 async def start(ctx):
     """開始遊戲 (分配身分並進入天黑狀態)"""
-    global game_active, roles, voted_players, votes
+    global game_active, roles, voted_players, votes, gods
 
     if game_active:
         await ctx.send("遊戲已經在進行中。")
         return
 
     # 設定初始天神 (執行 !start 的人)
-    gods = [ctx.author]
+    if ctx.author not in gods:
+        gods.append(ctx.author)
 
     # 如果天神在玩家列表中，將其移除
     if ctx.author in players:
@@ -298,8 +319,9 @@ async def vote(ctx, *, target: str):
 @bot.command()
 async def reset(ctx):
     """重置遊戲狀態"""
-    global players, roles, votes, voted_players, game_active
+    global players, roles, votes, voted_players, game_active, gods
     players = []
+    gods = []
     roles = {}
     votes = {}
     voted_players = set()
