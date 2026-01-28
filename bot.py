@@ -142,9 +142,45 @@ async def night(ctx):
     """切換到天黑 (關閉發言權限，限管理員)"""
     await perform_night(ctx)
 
+async def resolve_votes(ctx):
+    """結算投票結果"""
+    global players, votes, voted_players
+
+    if not votes:
+        # 所有人都投廢票
+        await ctx.send("所有人均投廢票 (Abstain)，無人死亡。")
+        # 重置投票狀態
+        votes = {}
+        voted_players = set()
+        return
+
+    # 計算票數
+    max_votes = max(votes.values())
+    candidates = [p for p, c in votes.items() if c == max_votes]
+
+    if len(candidates) > 1:
+        # 同票
+        names = ", ".join([p.name for p in candidates])
+        await ctx.send(f"平票！({names}) 均為 {max_votes} 票。請重新投票。")
+        # 重置投票狀態
+        votes = {}
+        voted_players = set()
+    else:
+        # 有結果
+        victim = candidates[0]
+        await ctx.send(f"投票結束！**{victim.name}** 以 {max_votes} 票被處決。")
+
+        # 移除玩家
+        if victim in players:
+            players.remove(victim)
+
+        # 重置投票狀態 (等待下一輪)
+        votes = {}
+        voted_players = set()
+
 @bot.command()
-async def vote(ctx, target: discord.Member):
-    """投票 [玩家]"""
+async def vote(ctx, *, target: str):
+    """投票 [玩家] 或 [no] (廢票)"""
     if not game_active:
         await ctx.send("遊戲尚未開始。")
         return
@@ -153,22 +189,37 @@ async def vote(ctx, target: discord.Member):
         await ctx.send("你沒有參與這場遊戲。")
         return
 
-    if target not in players:
-        await ctx.send("該玩家不在遊戲中。")
-        return
-
     if ctx.author in voted_players:
         await ctx.send(f"{ctx.author.mention} 你已經投過票了！")
         return
 
-    # 記錄票數
-    if target not in votes:
-        votes[target] = 0
+    # 處理廢票
+    if target.strip().lower() == "no":
+        voted_players.add(ctx.author)
+        await ctx.send(f"{ctx.author.mention} 投了廢票 (Abstain)。")
+    else:
+        # 嘗試解析玩家
+        try:
+            target_member = await commands.MemberConverter().convert(ctx, target)
+        except commands.BadArgument:
+            await ctx.send(f"找不到玩家 `{target}`。")
+            return
 
-    votes[target] += 1
-    voted_players.add(ctx.author)
+        if target_member not in players:
+            await ctx.send("該玩家不在遊戲中。")
+            return
 
-    await ctx.send(f"{ctx.author.mention} 投票給了 {target.mention}！目前 {target.name} 有 {votes[target]} 票。")
+        # 記錄票數
+        if target_member not in votes:
+            votes[target_member] = 0
+
+        votes[target_member] += 1
+        voted_players.add(ctx.author)
+        await ctx.send(f"{ctx.author.mention} 投票給了 {target_member.mention}！")
+
+    # 檢查是否所有人都投完了
+    if len(voted_players) == len(players):
+        await resolve_votes(ctx)
 
 @bot.command()
 async def reset(ctx):
