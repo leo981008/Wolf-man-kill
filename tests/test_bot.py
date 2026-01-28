@@ -9,7 +9,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bot
 
 class TestBotStart(unittest.IsolatedAsyncioTestCase):
-    async def test_start_command_sends_role_descriptions(self):
+    @patch('bot.perform_night', new_callable=AsyncMock)
+    async def test_start_command_sends_role_descriptions(self, mock_perform_night):
         # Setup mocks
         ctx = MagicMock()
         ctx.author = MagicMock()
@@ -83,6 +84,50 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         # 3-player game shouldn't have these
         self.assertNotIn("女巫", description_msg)
         self.assertNotIn("獵人", description_msg)
+
+    @patch('bot.perform_night', new_callable=AsyncMock)
+    async def test_start_command_sends_attribution(self, mock_perform_night):
+        # Setup mocks
+        ctx = MagicMock()
+        ctx.author = MagicMock()
+        ctx.author.name = "TestHost"
+        ctx.author.send = AsyncMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.set_permissions = AsyncMock()
+        ctx.guild = MagicMock()
+        ctx.guild.default_role = MagicMock()
+
+        # Mock players (Need at least 3 to start)
+        player1 = MagicMock()
+        player1.name = "Player1"
+        player1.send = AsyncMock()
+        player2 = MagicMock()
+        player2.name = "Player2"
+        player2.send = AsyncMock()
+        player3 = MagicMock()
+        player3.name = "Player3"
+        player3.send = AsyncMock()
+
+        # Set up bot state
+        bot.players = [player1, player2, player3]
+        bot.game_active = False
+        bot.roles = {}
+        bot.gods = [ctx.author] # Author must be god to start
+
+        # Call start
+        await bot.start(ctx)
+
+        # Check for attribution in any of the sent messages
+        found_attribution = False
+        for call_args in ctx.send.call_args_list:
+            args, kwargs = call_args
+            msg = args[0]
+            if "(資料來源: [狼人殺百科](https://lrs.fandom.com/zh/wiki/局式), CC-BY-SA)" in msg:
+                found_attribution = True
+                break
+
+        self.assertTrue(found_attribution, "Attribution message should be present in bot output")
 
 if __name__ == "__main__":
     unittest.main()

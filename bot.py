@@ -10,6 +10,8 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # 遊戲板子配置 (從 Wiki 獲取)
+# 資料來源: 狼人殺百科 (https://lrs.fandom.com/zh/wiki/局式?variant=zh-tw)
+# 授權: CC-BY-SA
 GAME_TEMPLATES = {
     6: [
         {"name": "明牌局", "roles": ["狼人", "狼人", "預言家", "獵人", "平民", "平民"]},
@@ -407,7 +409,7 @@ async def start(ctx):
         except discord.Forbidden:
             await ctx.send(f"無法發送私訊給天神 {god.mention}。")
 
-    await ctx.send(f"遊戲開始！使用板子：**{template_name}**。身分與編號已發送給所有天神與玩家。")
+    await ctx.send(f"遊戲開始！使用板子：**{template_name}** (資料來源: [狼人殺百科](https://lrs.fandom.com/zh/wiki/局式), CC-BY-SA)。身分與編號已發送給所有天神與玩家。")
 
     # 整理本局出現的角色功能說明
     unique_roles = set(role_pool)
