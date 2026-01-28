@@ -5,6 +5,9 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+# 使用加密安全的隨機數產生器
+secure_random = random.SystemRandom()
+
 # 載入環境變數
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -154,7 +157,7 @@ async def perform_night(ctx):
             counts = Counter(votes)
             max_votes = counts.most_common(1)[0][1]
             candidates = [k for k, v in counts.items() if v == max_votes]
-            wolf_kill = random.choice(candidates) # 平票隨機
+            wolf_kill = secure_random.choice(candidates) # 平票隨機
 
             # 通知狼人目標
             for wolf in wolves:
@@ -352,7 +355,7 @@ async def start(ctx):
 
         # 處理多餘玩家 -> 轉為天神
         # 洗牌確保隨機選出 active players
-        random.shuffle(players)
+        secure_random.shuffle(players)
 
         active_players = players[:target_count]
         excess_players = players[target_count:]
@@ -366,12 +369,12 @@ async def start(ctx):
 
         # 隨機選擇板子
         templates = GAME_TEMPLATES[target_count]
-        selected_template = random.choice(templates)
+        selected_template = secure_random.choice(templates)
         role_pool = selected_template["roles"].copy()
         template_name = f"{target_count}人 {selected_template['name']}"
 
     # 分配身分與編號
-    random.shuffle(role_pool)
+    secure_random.shuffle(role_pool)
 
     # 分配編號 (1~N)
     player_ids = {}
