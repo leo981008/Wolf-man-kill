@@ -93,11 +93,28 @@ async def join(ctx):
         await ctx.send("遊戲已經開始，無法加入。")
         return
 
+    if ctx.author in gods:
+        gods.remove(ctx.author)
+        await ctx.send(f"{ctx.author.mention} 已從天神轉為玩家。")
+
     if ctx.author in players:
         await ctx.send(f"{ctx.author.mention} 你已經在玩家列表中了。")
     else:
         players.append(ctx.author)
         await ctx.send(f"{ctx.author.mention} 加入了遊戲！目前人數: {len(players)}")
+
+@bot.command()
+async def god(ctx):
+    """轉為天神 (旁觀者)"""
+    if ctx.author in players:
+        players.remove(ctx.author)
+        await ctx.send(f"{ctx.author.mention} 已從玩家轉為天神。")
+
+    if ctx.author not in gods:
+        gods.append(ctx.author)
+        await ctx.send(f"{ctx.author.mention} 已加入天神組 (God)！")
+    else:
+        await ctx.send(f"{ctx.author.mention} 你已經是天神了。")
 
 @bot.command()
 async def start(ctx):
@@ -108,13 +125,14 @@ async def start(ctx):
         await ctx.send("遊戲已經在進行中。")
         return
 
-    # 設定初始天神 (執行 !start 的人)
-    gods = [ctx.author]
-
     # 如果天神在玩家列表中，將其移除
     if ctx.author in players:
         players.remove(ctx.author)
         await ctx.send(f"{ctx.author.mention} 已轉為天神 (God)，不參與遊戲。")
+
+    # 確保發起人是天神
+    if ctx.author not in gods:
+        gods.append(ctx.author)
 
     current_player_count = len(players)
     if current_player_count < 3:
@@ -232,6 +250,45 @@ async def day(ctx):
 async def night(ctx):
     """切換到天黑 (關閉發言權限，限管理員)"""
     await perform_night(ctx)
+
+@bot.command()
+async def die(ctx, *, target: str):
+    """天神指令：處決玩家"""
+    if ctx.author not in gods:
+        await ctx.send("只有天神 (God) 可以使用此指令。")
+        return
+
+    # 嘗試解析玩家
+    try:
+        target_member = await commands.MemberConverter().convert(ctx, target)
+    except commands.BadArgument:
+        await ctx.send(f"找不到玩家 `{target}`。")
+        return
+
+    if target_member not in players:
+        await ctx.send("該玩家不在遊戲中或已經死亡。")
+        return
+
+    # 執行處決
+    players.remove(target_member)
+
+    # 公告 (不公開身分)
+    await ctx.send(f"👑 天神執行了處決，**{target_member.name}** 已死亡。")
+
+    # 整理存活名單發送給所有天神
+    living_status = "**目前存活玩家與身分：**\n"
+    for p in players:
+        r = roles.get(p, "未知")
+        living_status += f"{p.name}: {r}\n"
+
+    dead_player_role = roles.get(target_member, "未知")
+    god_notification = f"💀 **{target_member.name}** ({dead_player_role}) 已死亡。\n{living_status}"
+
+    for g in gods:
+        try:
+            await g.send(god_notification)
+        except discord.Forbidden:
+            pass
 
 async def resolve_votes(ctx):
     """結算投票結果"""
