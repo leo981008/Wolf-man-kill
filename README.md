@@ -137,3 +137,8 @@ python bot.py
 - `.env`: 設定檔 (Token)。
 - `requirements.txt`: 套件清單。
 - `werewolf.service`: 自動啟動設定檔。
+
+## 資料來源與授權
+
+本專案的遊戲板子配置（局式）資料取自 [狼人殺百科](https://lrs.fandom.com/zh/wiki/%E5%B1%80%E5%BC%8F?variant=zh-tw)。
+根據 Fandom 社群規範，內容採用 [CC-BY-SA](https://creativecommons.org/licenses/by-sa/3.0/) 授權。
