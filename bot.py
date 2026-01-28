@@ -34,6 +34,23 @@ GAME_TEMPLATES = {
     ]
 }
 
+# 角色功能說明
+ROLE_DESCRIPTIONS = {
+    "狼人": "每晚可以與隊友討論並殺死一名玩家。目標是殺死所有神職或所有村民（屠邊）。",
+    "預言家": "每晚可以查驗一名玩家的身分，知道他是好人還是狼人。",
+    "平民": "沒有特殊技能，白天需根據發言投票找出狼人。",
+    "獵人": "被狼人殺死或被投票出局時，可以開槍帶走一名玩家（被女巫毒死無法開槍）。",
+    "守衛": "每晚可以守護一名玩家，防止其被狼人殺害。不能連續兩晚守護同一人。",
+    "女巫": "擁有一瓶解藥和一瓶毒藥。解藥可救活被狼人殺害的玩家，毒藥可毒死一名玩家。兩瓶藥不能同一晚使用。",
+    "白痴": "被投票出局時可以翻牌亮身分免死，但之後失去投票權，只能發言。",
+    "狼王": "被殺死或投票出局時，可以發動技能帶走一名玩家（被毒死無法發動）。",
+    "白狼王": "白天發言階段可以選擇自爆，並帶走一名場上存活的玩家。",
+    "惡靈騎士": "擁有一次反傷技能。若被預言家查驗，預言家死亡；若被女巫毒殺，女巫死亡。",
+    "騎士": "白天發言階段可以翻牌決鬥一名玩家。若該玩家是狼人，則狼人死亡；若為好人，則騎士死亡。",
+    "隱狼": "被預言家查驗時顯示為好人。無狼刀，當其他狼人死光後獲得刀權（視板子規則而定）。",
+    "老流氓": "平民陣營，被狼人殺害不會死，被女巫毒殺或獵人帶走會死。勝利條件與平民相同。",
+}
+
 # 設定 Intent (權限)
 intents = discord.Intents.default()
 intents.members = True
@@ -167,7 +184,9 @@ async def start(ctx):
 
         # 傳送身分給各個玩家
         try:
-            await player.send(f"您的身分是：**{role}**")
+            description = ROLE_DESCRIPTIONS.get(role, "暫無說明")
+            msg = f"您的身分是：**{role}**\n\n**功能說明：**\n{description}"
+            await player.send(msg)
         except discord.Forbidden:
             await ctx.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
 
@@ -253,7 +272,8 @@ async def on_command_error(ctx, error):
     else:
         print(f"Error: {error}")
 
-if TOKEN:
-    bot.run(TOKEN)
-else:
-    print("錯誤: 未找到 DISCORD_TOKEN，請檢查 .env 檔案。")
+if __name__ == "__main__":
+    if TOKEN:
+        bot.run(TOKEN)
+    else:
+        print("錯誤: 未找到 DISCORD_TOKEN，請檢查 .env 檔案。")
