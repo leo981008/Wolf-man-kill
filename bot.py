@@ -76,14 +76,21 @@ async def start(ctx):
     role_pool = ["狼人", "預言家"] + ["村民"] * (len(players) - 2)
     random.shuffle(role_pool)
 
+    role_summary = []
     for player, role in zip(players, role_pool):
         roles[player] = role
-        try:
-            await player.send(f"遊戲開始！你的身分是: **{role}**")
-        except discord.Forbidden:
-            await ctx.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
+        role_summary.append(f"{player.name}: {role}")
 
-    await ctx.send("身分已發放！")
+    # 將所有身分發送給主持人 (執行 !start 的人)
+    host = ctx.author
+    try:
+        summary_msg = "**本局身分列表：**\n" + "\n".join(role_summary)
+        await host.send(summary_msg)
+        await ctx.send(f"遊戲開始！身分已發送給主持人 {host.mention}。")
+    except discord.Forbidden:
+        await ctx.send(f"無法發送私訊給主持人 {host.mention}，請檢查隱私設定。遊戲無法開始。")
+        game_active = False
+        return
 
     # 進入天黑 (禁言)
     await perform_night(ctx)
