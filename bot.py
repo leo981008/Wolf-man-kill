@@ -59,17 +59,26 @@ async def join(ctx):
 async def start(ctx):
     """開始遊戲 (分配身分並進入天黑狀態)"""
     global game_active, roles, voted_players, votes
+
+    if game_active:
+        await ctx.send("遊戲已經在進行中。")
+        return
+
+    # 設定天神 (執行 !start 的人)
+    god = ctx.author
+
+    # 如果天神在玩家列表中，將其移除
+    if god in players:
+        players.remove(god)
+        await ctx.send(f"{god.mention} 已轉為天神 (God)，不參與遊戲。")
+
     player_count = len(players)
     if player_count < 3:
-        await ctx.send("人數不足，至少需要 3 人才能開始。")
+        await ctx.send("人數不足，至少需要 3 人 (不含天神) 才能開始。")
         return
 
     if player_count > 20:
         await ctx.send("人數過多，本遊戲最多支援 20 人。")
-        return
-
-    if game_active:
-        await ctx.send("遊戲已經在進行中。")
         return
 
     game_active = True
@@ -102,14 +111,19 @@ async def start(ctx):
         roles[player] = role
         role_summary.append(f"{player.name}: {role}")
 
-    # 將所有身分發送給主持人 (執行 !start 的人)
-    host = ctx.author
+        # 傳送身分給各個玩家
+        try:
+            await player.send(f"您的身分是：**{role}**")
+        except discord.Forbidden:
+            await ctx.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
+
+    # 將所有身分發送給天神
     try:
         summary_msg = "**本局身分列表：**\n" + "\n".join(role_summary)
-        await host.send(summary_msg)
-        await ctx.send(f"遊戲開始！身分已發送給主持人 {host.mention}。")
+        await god.send(summary_msg)
+        await ctx.send(f"遊戲開始！身分已發送給天神 {god.mention}，各位玩家請查看私訊。")
     except discord.Forbidden:
-        await ctx.send(f"無法發送私訊給主持人 {host.mention}，請檢查隱私設定。遊戲無法開始。")
+        await ctx.send(f"無法發送私訊給天神 {god.mention}，請檢查隱私設定。遊戲無法開始。")
         game_active = False
         return
 
