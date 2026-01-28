@@ -61,6 +61,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # 遊戲狀態
 players = []
 roles = {}
+gods = []
 votes = {}
 voted_players = set()
 game_active = False
@@ -101,7 +102,7 @@ async def join(ctx):
 @bot.command()
 async def start(ctx):
     """開始遊戲 (分配身分並進入天黑狀態)"""
-    global game_active, roles, voted_players, votes
+    global game_active, roles, voted_players, votes, gods
 
     if game_active:
         await ctx.send("遊戲已經在進行中。")
@@ -314,9 +315,15 @@ async def vote(ctx, *, target: str):
 @bot.command()
 async def reset(ctx):
     """重置遊戲狀態"""
-    global players, roles, votes, voted_players, game_active
+    global players, roles, votes, voted_players, game_active, gods
+
+    if game_active and ctx.author not in gods:
+        await ctx.send("只有天神 (God) 才能在遊戲進行中重置遊戲。")
+        return
+
     players = []
     roles = {}
+    gods = []
     votes = {}
     voted_players = set()
     game_active = False
