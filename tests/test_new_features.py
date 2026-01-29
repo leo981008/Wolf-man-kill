@@ -130,7 +130,9 @@ class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertIn(survivor, bot.players)
 
         # Verify public message
-        ctx.send.assert_called_with(f"👑 天神執行了處決，**{victim.name}** 已死亡。")
+        expected_msg = f"👑 天神執行了處決，**{victim.name}** 已死亡。"
+        found = any(call.args[0] == expected_msg for call in ctx.send.mock_calls)
+        self.assertTrue(found, f"Message '{expected_msg}' not found in calls: {ctx.send.mock_calls}")
 
         # Verify private message to God
         # Should contain "狼人" (victim role) and "Survivor: 平民"

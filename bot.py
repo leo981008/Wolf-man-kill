@@ -57,6 +57,11 @@ ROLE_DESCRIPTIONS = {
     "老流氓": "平民陣營，被狼人殺害不會死，被女巫毒殺或獵人帶走會死。勝利條件與平民相同。",
 }
 
+# 角色分類 (用於屠邊判定)
+WOLF_FACTION = {"狼人", "狼王", "白狼王", "惡靈騎士", "隱狼"}
+GOD_FACTION = {"預言家", "女巫", "獵人", "守衛", "白痴", "騎士"}
+VILLAGER_FACTION = {"平民", "老流氓"}
+
 # 設定 Intent (權限)
 intents = discord.Intents.default()
 intents.members = True
@@ -92,6 +97,63 @@ def get_id_by_player(player):
 @bot.event
 async def on_ready():
     print(f'{bot.user} 已上線！')
+
+async def check_game_over(ctx):
+    """檢查是否滿足獲勝條件"""
+    global game_active
+
+    if not game_active:
+        return
+
+    wolf_count = 0
+    god_count = 0
+    villager_count = 0
+
+    for p in players:
+        role = roles.get(p)
+        if role in WOLF_FACTION:
+            wolf_count += 1
+        elif role in GOD_FACTION:
+            god_count += 1
+        elif role in VILLAGER_FACTION:
+            villager_count += 1
+
+    winner = None
+    reason = ""
+
+    # 狼人獲勝條件：屠邊 (神職全滅 或 平民全滅)
+    if god_count == 0:
+        winner = "狼人陣營"
+        reason = "神職已全部陣亡 (屠邊)。"
+    elif villager_count == 0:
+        winner = "狼人陣營"
+        reason = "平民已全部陣亡 (屠邊)。"
+
+    # 好人獲勝條件：狼人全滅
+    if wolf_count == 0:
+        winner = "好人陣營"
+        reason = "狼人已全部陣亡。"
+
+    if winner:
+        game_active = False
+        await ctx.send(f"🏆 **遊戲結束！{winner}獲勝！**\n原因：{reason}")
+
+        # 公佈身分
+        msg = "**本局玩家身分：**\n"
+        # 顯示所有參與過的玩家 (包括已死亡)
+        # 由於 players 只剩活人，我們需要從 roles (字典) 中獲取所有玩家
+        for p, r in roles.items():
+            msg += f"{p.name}: {r}\n"
+
+        await ctx.send(msg)
+
+        # 恢復發言權限
+        try:
+            await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
+        except:
+            pass
+
+        await ctx.send("請使用 `!reset` 重置遊戲以開始新的一局。")
 
 async def request_dm_input(player, prompt, valid_check, timeout=45):
     """私訊請求輸入的輔助函式"""
@@ -265,6 +327,9 @@ async def perform_day(ctx, dead_players=[]):
         msg += "昨晚是平安夜。"
 
     await ctx.send(msg)
+
+    # 檢查是否獲勝
+    await check_game_over(ctx)
 
 @bot.command()
 async def join(ctx):
@@ -495,6 +560,9 @@ async def die(ctx, *, target: str):
         except discord.Forbidden:
             pass
 
+    # 檢查是否獲勝
+    await check_game_over(ctx)
+
 async def resolve_votes(ctx):
     """結算投票結果"""
     global players, votes, voted_players
@@ -530,6 +598,9 @@ async def resolve_votes(ctx):
         # 重置投票狀態 (等待下一輪)
         votes = {}
         voted_players = set()
+
+        # 檢查是否獲勝
+        await check_game_over(ctx)
 
 @bot.command()
 async def vote(ctx, *, target: str):
