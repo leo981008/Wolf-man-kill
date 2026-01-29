@@ -83,6 +83,11 @@ class GameState:
         self.creator = None      # 房主 (用於權限控制)
         self.lock = asyncio.Lock() # 並發控制鎖
 
+        # 發言階段狀態
+        self.speaking_queue = []
+        self.current_speaker = None
+        self.speaking_active = False
+
     def reset(self):
         self.players = []
         self.roles = {}
@@ -94,6 +99,10 @@ class GameState:
         self.player_id_map = {}
         self.witch_potions = {'antidote': True, 'poison': True}
         self.creator = None
+
+        self.speaking_queue = []
+        self.current_speaker = None
+        self.speaking_active = False
         # lock 不需要重置，沿用同一個實例
 
 # Guild ID -> GameState
@@ -362,6 +371,66 @@ async def perform_night(ctx, game):
 
     await perform_day(ctx, game, dead_players_list)
 
+async def set_player_mute(member, mute=True):
+    """安全地設定玩家靜音狀態"""
+    if not member.voice:
+        return
+    try:
+        await member.edit(mute=mute)
+    except (discord.Forbidden, discord.HTTPException):
+        pass # 忽略權限錯誤或網路錯誤
+
+async def mute_all_players(ctx, game):
+    """將所有存活玩家靜音 (需在 Lock 外執行 I/O)"""
+    players_to_mute = []
+    async with game.lock:
+        players_to_mute = list(game.players)
+
+    tasks = []
+    for p in players_to_mute:
+        tasks.append(set_player_mute(p, True))
+    await asyncio.gather(*tasks)
+
+async def unmute_all_players(ctx, game):
+    """解除所有存活玩家靜音"""
+    players_to_unmute = []
+    async with game.lock:
+        players_to_unmute = list(game.players)
+
+    tasks = []
+    for p in players_to_unmute:
+        tasks.append(set_player_mute(p, False))
+    await asyncio.gather(*tasks)
+
+async def start_next_turn(ctx, game):
+    """開始下一位玩家的發言"""
+    next_player = None
+    remaining_count = 0
+
+    async with game.lock:
+        if not game.speaking_queue:
+            game.speaking_active = False
+            game.current_speaker = None
+            await ctx.send("🎙️ **發言階段結束！** 現在可以自由討論與投票。")
+
+            # 解除所有人的靜音
+            asyncio.create_task(unmute_all_players(ctx, game))
+            return
+
+        next_player = game.speaking_queue.pop(0)
+        game.current_speaker = next_player
+        remaining_count = len(game.speaking_queue)
+
+    # 執行 I/O
+    await set_player_mute(next_player, False) # 解除當前發言者靜音
+
+    pid = "未知"
+    async with game.lock:
+        pid = game.player_id_map.get(next_player, "未知")
+
+    await ctx.send(f"🎙️ 輪到 **{pid} 號 {next_player.mention}** 發言。 (剩餘 {remaining_count} 人等待)\n請發言完畢後輸入 `!done` 結束回合。")
+
+
 async def perform_day(ctx, game, dead_players=[]):
     """執行天亮邏輯"""
     try:
@@ -373,6 +442,7 @@ async def perform_day(ctx, game, dead_players=[]):
 
     msg = "🌞 **天亮了！** 請開始討論。\n"
 
+    game_over = False
     async with game.lock:
         if dead_players:
             names = ", ".join([p.name for p in dead_players])
@@ -385,8 +455,25 @@ async def perform_day(ctx, game, dead_players=[]):
             msg += "昨晚是平安夜。"
 
         await check_game_over(ctx, game)
+        game_over = not game.game_active
 
     await ctx.send(msg)
+
+    if not game_over:
+        # 初始化發言階段
+        await ctx.send("🔊 **進入依序發言階段**，正在隨機排序並設定靜音...")
+
+        async with game.lock:
+            game.speaking_queue = list(game.players)
+            secure_random.shuffle(game.speaking_queue)
+            game.speaking_active = True
+            game.current_speaker = None
+
+        # 先將所有人靜音
+        await mute_all_players(ctx, game)
+
+        # 開始第一位
+        await start_next_turn(ctx, game)
 
 
 @bot.command()
@@ -616,6 +703,41 @@ async def die(ctx, *, target: str):
             pass
 
 
+@bot.command()
+async def done(ctx):
+    """結束發言 (僅限當前發言玩家)"""
+    game = get_game(ctx.guild.id)
+
+    # 檢查是否在發言階段
+    is_speaking = False
+    current_speaker = None
+    async with game.lock:
+        is_speaking = game.speaking_active
+        current_speaker = game.current_speaker
+
+    if not is_speaking:
+        await ctx.send("現在不是發言階段。")
+        return
+
+    # 檢查權限 (當前發言者 或 管理員/房主)
+    is_speaker = (ctx.author == current_speaker)
+    is_admin = ctx.author.guild_permissions.administrator
+    is_creator = (game.creator == ctx.author)
+
+    if not (is_speaker or is_admin or is_creator):
+        await ctx.send(f"現在是 {current_speaker.mention} 的發言時間。")
+        return
+
+    if is_admin or is_creator and not is_speaker:
+        await ctx.send(f"管理員/房主強制結束了 {current_speaker.name} 的發言。")
+
+    # 將當前發言者靜音
+    if current_speaker:
+        await set_player_mute(current_speaker, True)
+
+    # 進行下一位
+    await start_next_turn(ctx, game)
+
 async def resolve_votes(ctx, game):
     """結算投票結果 (不應持有 Lock 呼叫)"""
     async with game.lock:
@@ -656,6 +778,12 @@ async def vote(ctx, *, target: str):
     if not game.game_active:
         await ctx.send("遊戲尚未開始。")
         return
+
+    # 檢查是否在發言階段
+    async with game.lock:
+        if game.speaking_active:
+            await ctx.send("現在是發言階段，請等待發言結束後再投票。")
+            return
 
     if ctx.author not in game.players:
         await ctx.send("你沒有參與這場遊戲。")
