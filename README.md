@@ -2,6 +2,14 @@
 
 這是一個專為 Raspberry Pi 設計的多人狼人殺 Discord Bot，具備 Wiki 標準局式、身分分配與說明、天黑禁言管理與投票功能。
 
+## 安全性增強 (Security Enhancements)
+
+本專案已通過安全性審計，針對以下關鍵領域進行了強化：
+- **加密安全性**：核心邏輯全面採用 `random.SystemRandom` (CSPRNG) 取代標準偽隨機數生成器，防止通過狀態預測進行作弊。
+- **並發控制**：引入 `asyncio.Lock` 機制，防止多名玩家同時加入或投票時產生的 Race Condition 與數據不一致。
+- **存取控制**：嚴格的權限驗證，確保只有房主或管理員能執行敏感指令 (如 `!reset`, `!die`)。
+- **輸入驗證**：針對所有使用者輸入進行長度與型別檢查，防止惡意 Payload 攻擊。
+
 ## 功能
 - **Wiki 標準局式**：支援 6, 7, 8, 9, 10, 12 人局，自動根據人數選擇最接近的 Wiki 模板（如：預女獵白、狼王守衛、諸神黃昏等）。
 - **最大人數限制**：本遊戲最多支援 20 名玩家。
@@ -99,12 +107,13 @@ pip install -r requirements.txt
 ```
 
 ### 5. 設定 Token
-編輯 `.env` 檔案，填入你的 Discord Bot Token：
+使用範本建立 `.env` 檔案，填入你的 Discord Bot Token：
 
 ```bash
+cp .env.example .env
 nano .env
 ```
-內容範例：
+修改內容範例：
 ```
 DISCORD_TOKEN=你的_Token_貼在這裡
 ```
@@ -117,6 +126,12 @@ DISCORD_TOKEN=你的_Token_貼在這裡
 python bot.py
 ```
 若看到 `已上線！` 表示成功。按 `Ctrl+C` 停止。
+
+### 7. 執行測試 (Optional)
+若要驗證 Bot 的安全性與邏輯，可執行內建測試：
+```bash
+python3 -m pytest tests/
+```
 
 ---
 
@@ -151,9 +166,11 @@ python bot.py
 
 ## 檔案結構
 - `bot.py`: 主程式。
-- `.env`: 設定檔 (Token)。
+- `.env`: 設定檔 (請勿上傳至公開儲存庫)。
+- `.env.example`: 設定檔範本。
 - `requirements.txt`: 套件清單。
 - `werewolf.service`: 自動啟動設定檔。
+- `tests/`: 測試代碼目錄。
 
 ## 資料來源與授權
 
