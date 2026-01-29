@@ -743,7 +743,7 @@ async def on_command_error(ctx, error):
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("指令參數錯誤，請檢查用法。")
     else:
-        pass
+        print(f"Error: {error}")
 
 if __name__ == "__main__":
     if TOKEN:
