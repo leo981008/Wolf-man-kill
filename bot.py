@@ -125,10 +125,12 @@ class GameState:
         self.game_mode = "online" # "online" or "offline"
         self.ai_players = []
         self.speech_history = [] # 儲存本輪發言紀錄
+        self.role_to_players = {} # 角色 -> 玩家列表 (優化查找)
 
     def reset(self):
         self.players = []
         self.roles = {}
+        self.role_to_players = {}
         self.gods = []
         self.votes = {}
         self.voted_players = set()
@@ -298,7 +300,8 @@ async def perform_night(channel, game):
     # 守衛
     guard_protect = None
     async with game.lock:
-        guard = next((p for p, r in game.roles.items() if r == "守衛" and p in game.players), None)
+        guard_candidates = game.role_to_players.get("守衛", [])
+        guard = next((p for p in guard_candidates if p in game.players), None)
 
     if guard:
         resp = await get_action(guard, "守衛", "🛡️ **守衛請睜眼。** 今晚要守護誰？請輸入玩家編號 (輸入 no 空守):")
@@ -313,7 +316,8 @@ async def perform_night(channel, game):
     # 狼人
     wolf_kill = None
     async with game.lock:
-        wolves = [p for p, r in game.roles.items() if r == "狼人" and p in game.players]
+        wolf_candidates = game.role_to_players.get("狼人", [])
+        wolves = [p for p in wolf_candidates if p in game.players]
 
     if wolves:
         # 狼人分開詢問
@@ -347,7 +351,8 @@ async def perform_night(channel, game):
     witch_save = False
     witch_poison = None
     async with game.lock:
-        witch = next((p for p, r in game.roles.items() if r == "女巫" and p in game.players), None)
+        witch_candidates = game.role_to_players.get("女巫", [])
+        witch = next((p for p in witch_candidates if p in game.players), None)
 
     if witch:
         use_antidote = False
@@ -405,7 +410,8 @@ async def perform_night(channel, game):
 
     # 預言家
     async with game.lock:
-        seer = next((p for p, r in game.roles.items() if r == "預言家" and p in game.players), None)
+        seer_candidates = game.role_to_players.get("預言家", [])
+        seer = next((p for p in seer_candidates if p in game.players), None)
 
     if seer:
         resp = await get_action(seer, "預言家", "🔮 **預言家請睜眼。** 今晚要查驗誰？請輸入玩家編號:")
@@ -806,6 +812,9 @@ async def start(interaction: discord.Interaction):
     for player, role in zip(active_players, role_pool):
         async with game.lock:
              game.roles[player] = role
+             if role not in game.role_to_players:
+                 game.role_to_players[role] = []
+             game.role_to_players[role].append(player)
         pid = game.player_id_map[player]
         role_summary.append(f"{pid}. {player.name}: {role}")
         try:
