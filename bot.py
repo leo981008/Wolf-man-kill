@@ -831,6 +831,7 @@ async def start(interaction: discord.Interaction):
         except: pass
 
     await announce_event(interaction.channel, game, "遊戲開始", f"使用板子：{template_name}")
+    await interaction.channel.send("(資料來源: [狼人殺百科](https://lrs.fandom.com/zh/wiki/局式), CC-BY-SA)")
     await perform_night(interaction.channel, game)
 
 @bot.tree.command(name="day", description="切換到天亮 (限管理員)")
