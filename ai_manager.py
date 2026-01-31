@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import asyncio
 import json
 import re
+import aiohttp
 
 load_dotenv()
 
@@ -11,8 +12,6 @@ load_dotenv()
 api_key = os.getenv('GEMINI_API_KEY')
 if api_key:
     genai.configure(api_key=api_key)
-else:
-    print("Warning: GEMINI_API_KEY not found in environment variables. AI features will be disabled.")
 
 # Model configuration
 GENERATION_CONFIG = {
@@ -43,14 +42,50 @@ SAFETY_SETTINGS = [
 
 class AIManager:
     def __init__(self):
+        self.provider = os.getenv('AI_PROVIDER', 'gemini').lower()
+        self.ollama_model = os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
+        self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+
         self.model = None
-        if api_key:
-            self.model = genai.GenerativeModel(model_name="gemini-1.5-flash",
-                                              generation_config=GENERATION_CONFIG,
-                                              safety_settings=SAFETY_SETTINGS)
+        if self.provider == 'gemini':
+            if api_key:
+                self.model = genai.GenerativeModel(model_name="gemini-1.5-flash",
+                                                  generation_config=GENERATION_CONFIG,
+                                                  safety_settings=SAFETY_SETTINGS)
+            else:
+                 print("Warning: GEMINI_API_KEY not found. AI features disabled for Gemini.")
+
+        print(f"AI Manager initialized. Provider: {self.provider}")
+        if self.provider == 'ollama':
+            print(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
+
+    async def _generate_with_ollama(self, prompt):
+        url = f"{self.ollama_host}/api/generate"
+        payload = {
+            "model": self.ollama_model,
+            "prompt": prompt,
+            "stream": False
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data.get("response", "").strip()
+                    else:
+                        error_text = await response.text()
+                        print(f"Ollama API Error: {response.status} - {error_text}")
+                        return ""
+        except Exception as e:
+            print(f"Ollama Connection Error: {e}")
+            return ""
 
     async def generate_response(self, prompt):
         """Generic async wrapper for generating content"""
+        if self.provider == 'ollama':
+            return await self._generate_with_ollama(prompt)
+
+        # Default to Gemini
         if not self.model:
             return "錯誤：Gemini API Key 未設定，無法生成內容。"
 
@@ -68,9 +103,6 @@ class AIManager:
         """
         Generates a balanced role list for a given player count.
         """
-        if not self.model:
-            return []
-
         prompt = f"""
         請為 {player_count} 名玩家設計一個平衡的狼人殺配置。
         只能使用以下角色：{', '.join(existing_roles)}。
@@ -97,9 +129,6 @@ class AIManager:
         """
         Generates flavor text for game events.
         """
-        if not self.model:
-            return f"[{event_type}] {context}"
-
         prompt = f"""
         你是一個狼人殺遊戲的主持人（上帝）。
         請根據以下情境，生成一段富有氛圍的旁白（約 30-50 字）。
@@ -114,9 +143,6 @@ class AIManager:
         """
         Decides an action for an AI player.
         """
-        if not self.model:
-            return "no"
-
         prompt = f"""
         你正在玩狼人殺。你的身分是：{role}。
         當前局勢：{game_context}
@@ -138,12 +164,14 @@ class AIManager:
             return match.group()
         return "no"
 
-    async def get_ai_speech(self, player_id, role, game_context):
+    async def get_ai_speech(self, player_id, role, game_context, speech_history=None):
         """
         Generates a speech for an AI player.
+        speech_history: List of strings (previous speeches in the round).
         """
-        if not self.model:
-            return "..."
+        history_text = ""
+        if speech_history:
+            history_text = "\n本輪發言紀錄：\n" + "\n".join(speech_history)
 
         prompt = f"""
         你正在玩狼人殺。你是 {player_id} 號玩家。
@@ -151,6 +179,7 @@ class AIManager:
         (如果是狼人，請偽裝成好人；如果是好人，請尋找狼人)。
 
         當前局勢：{game_context}
+        {history_text}
 
         現在輪到你發言。請簡短發言（50字以內），分析局勢或為自己辯解。
         請使用繁體中文，語氣要自然，像真人玩家一樣。
