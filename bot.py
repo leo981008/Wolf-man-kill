@@ -1,6 +1,7 @@
 import os
 import asyncio
 import discord
+from collections import deque
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -117,7 +118,7 @@ class GameState:
         self.lock = asyncio.Lock() # 並發控制鎖
 
         # 發言階段狀態
-        self.speaking_queue = []
+        self.speaking_queue = deque()
         self.current_speaker = None
         self.speaking_active = False
 
@@ -519,7 +520,7 @@ async def start_next_turn(channel, game):
             asyncio.create_task(perform_ai_voting(channel, game))
             return
 
-        next_player = game.speaking_queue.pop(0)
+        next_player = game.speaking_queue.popleft()
         game.current_speaker = next_player
         remaining_count = len(game.speaking_queue)
 
@@ -577,8 +578,9 @@ async def perform_day(channel, game, dead_players=[]):
     if not game_over:
         await channel.send("🔊 **進入依序發言階段**，正在隨機排序並設定靜音...")
         async with game.lock:
-            game.speaking_queue = list(game.players)
-            secure_random.shuffle(game.speaking_queue)
+            temp_queue = list(game.players)
+            secure_random.shuffle(temp_queue)
+            game.speaking_queue = deque(temp_queue)
             game.speaking_active = True
             game.current_speaker = None
             game.speech_history = [] # 清空發言紀錄

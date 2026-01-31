@@ -7,6 +7,7 @@ import asyncio
 # Add the parent directory to sys.path to import bot
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from collections import deque
 import bot
 
 class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
@@ -37,6 +38,7 @@ class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
 
         self.ctx = MagicMock()
         self.ctx.guild.id = self.guild_id
+        self.ctx.guild_id = self.guild_id
         self.ctx.send = AsyncMock()
         self.ctx.channel.set_permissions = AsyncMock()
         self.ctx.guild.default_role = MagicMock()
@@ -66,14 +68,15 @@ class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
         # Setup speaking phase
         self.game.speaking_active = True
         self.game.current_speaker = self.p1
-        self.game.speaking_queue = [self.p2]
+        self.game.speaking_queue = deque([self.p2])
 
-        self.ctx.author = self.p1
+        self.ctx.user = self.p1 # Interaction uses .user, not .author
+        self.ctx.response.send_message = AsyncMock()
 
         with patch('bot.set_player_mute', new_callable=AsyncMock) as mock_set_mute, \
              patch('bot.start_next_turn', new_callable=AsyncMock) as mock_start_turn:
 
-            await bot.done(self.ctx)
+            await bot.done.callback(self.ctx)
 
             # Should mute current speaker
             mock_set_mute.assert_called_with(self.p1, True)
@@ -82,24 +85,28 @@ class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
 
     async def test_vote_blocked_during_speaking(self):
         self.game.speaking_active = True
-        self.ctx.author = self.p1
+        self.ctx.user = self.p1
+        self.ctx.response.send_message = AsyncMock()
 
-        await bot.vote(self.ctx, target="2")
+        await bot.vote.callback(self.ctx, target_id="2")
 
         # Check that it sent a blocking message
-        args = self.ctx.send.call_args[0][0]
-        self.assertIn("現在是發言階段", args)
+        # In slash command it uses interaction.response.send_message with ephemeral=True
+        # await interaction.response.send_message("請等待發言結束。", ephemeral=True)
+        args = self.ctx.response.send_message.call_args[0][0]
+        self.assertIn("等待發言結束", args)
 
         # Verify no vote recorded
         self.assertNotIn(self.p2, self.game.votes)
 
     async def test_vote_allowed_after_speaking(self):
         self.game.speaking_active = False
-        self.ctx.author = self.p1
+        self.ctx.user = self.p1
+        self.ctx.response.send_message = AsyncMock()
 
         # Mock resolve_votes to avoid complexity
         with patch('bot.resolve_votes', new_callable=AsyncMock):
-             await bot.vote(self.ctx, target="2")
+             await bot.vote.callback(self.ctx, target_id="2")
 
         # Verify vote recorded
         self.assertIn(self.p2, self.game.votes)
