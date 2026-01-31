@@ -124,6 +124,7 @@ class GameState:
         # 新增屬性
         self.game_mode = "online" # "online" or "offline"
         self.ai_players = []
+        self.speech_history = [] # 儲存本輪發言紀錄
 
     def reset(self):
         self.players = []
@@ -140,6 +141,7 @@ class GameState:
         self.speaking_queue = []
         self.current_speaker = None
         self.speaking_active = False
+        self.speech_history = []
 
         self.game_mode = "online"
         self.ai_players = []
@@ -155,6 +157,24 @@ def get_game(guild_id):
 @bot.event
 async def on_ready():
     print(f'{bot.user} 已上線！(Slash Commands Enabled)')
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # 檢查是否為遊戲發言
+    if message.guild:
+        game = get_game(message.guild.id)
+        if game.game_active and game.speaking_active:
+            if game.current_speaker == message.author:
+                 async with game.lock:
+                     # 紀錄玩家發言
+                     msg_content = f"{message.author.name}: {message.content}"
+                     game.speech_history.append(msg_content)
+
+    # 必須加上這行，否則 commands 框架會失效 (雖然本專案主要用 Slash Command，但為了相容性還是加上)
+    await bot.process_commands(message)
 
 async def announce_event(channel, game, event_type, system_msg):
     narrative = await ai_manager.generate_narrative(event_type, system_msg)
@@ -517,7 +537,16 @@ async def start_next_turn(channel, game):
 
     if hasattr(next_player, 'bot') and next_player.bot:
         await asyncio.sleep(random.uniform(2, 5))
-        speech = await ai_manager.get_ai_speech(pid, role, "白天發言")
+
+        current_history = []
+        async with game.lock:
+            current_history = list(game.speech_history)
+
+        speech = await ai_manager.get_ai_speech(pid, role, "白天發言", current_history)
+
+        async with game.lock:
+            game.speech_history.append(f"{next_player.name}: {speech}")
+
         await channel.send(f"🗣️ **{next_player.name}**: {speech}")
         await asyncio.sleep(random.uniform(2, 4))
 
@@ -554,6 +583,7 @@ async def perform_day(channel, game, dead_players=[]):
             secure_random.shuffle(game.speaking_queue)
             game.speaking_active = True
             game.current_speaker = None
+            game.speech_history = [] # 清空發言紀錄
 
         await mute_all_players(channel, game)
         await start_next_turn(channel, game)
