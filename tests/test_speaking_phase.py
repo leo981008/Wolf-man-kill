@@ -37,7 +37,11 @@ class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
 
         self.ctx = MagicMock()
         self.ctx.guild.id = self.guild_id
+        self.ctx.guild_id = self.guild_id # Fix interaction.guild_id
         self.ctx.send = AsyncMock()
+        self.ctx.response = MagicMock()
+        self.ctx.response.send_message = AsyncMock()
+        self.ctx.channel.send = AsyncMock()
         self.ctx.channel.set_permissions = AsyncMock()
         self.ctx.guild.default_role = MagicMock()
 
@@ -51,7 +55,7 @@ class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
             self.game.game_active = True
 
             # Since perform_day removes dead players, pass empty list
-            await bot.perform_day(self.ctx, self.game, [])
+            await bot.perform_day(self.ctx.channel, self.game, [])
 
             # Check flags
             self.assertTrue(self.game.speaking_active)
@@ -69,11 +73,12 @@ class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
         self.game.speaking_queue = [self.p2]
 
         self.ctx.author = self.p1
+        self.ctx.user = self.p1
 
         with patch('bot.set_player_mute', new_callable=AsyncMock) as mock_set_mute, \
              patch('bot.start_next_turn', new_callable=AsyncMock) as mock_start_turn:
 
-            await bot.done(self.ctx)
+            await bot.done.callback(self.ctx)
 
             # Should mute current speaker
             mock_set_mute.assert_called_with(self.p1, True)
@@ -83,12 +88,13 @@ class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
     async def test_vote_blocked_during_speaking(self):
         self.game.speaking_active = True
         self.ctx.author = self.p1
+        self.ctx.user = self.p1
 
-        await bot.vote(self.ctx, target="2")
+        await bot.vote.callback(self.ctx, target_id="2")
 
-        # Check that it sent a blocking message
-        args = self.ctx.send.call_args[0][0]
-        self.assertIn("現在是發言階段", args)
+        # Check that it sent a blocking message (via response.send_message)
+        args = self.ctx.response.send_message.call_args[0][0]
+        self.assertIn("請等待發言結束", args)
 
         # Verify no vote recorded
         self.assertNotIn(self.p2, self.game.votes)
@@ -96,10 +102,11 @@ class TestSpeakingPhase(unittest.IsolatedAsyncioTestCase):
     async def test_vote_allowed_after_speaking(self):
         self.game.speaking_active = False
         self.ctx.author = self.p1
+        self.ctx.user = self.p1
 
         # Mock resolve_votes to avoid complexity
         with patch('bot.resolve_votes', new_callable=AsyncMock):
-             await bot.vote(self.ctx, target="2")
+             await bot.vote.callback(self.ctx, target_id="2")
 
         # Verify vote recorded
         self.assertIn(self.p2, self.game.votes)

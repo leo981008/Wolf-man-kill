@@ -22,10 +22,18 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         ctx.author.send = AsyncMock()
         ctx.send = AsyncMock()
         ctx.channel = MagicMock()
+        ctx.channel.send = AsyncMock()
         ctx.channel.set_permissions = AsyncMock()
         ctx.guild = MagicMock()
         ctx.guild.id = 12345
+        ctx.guild_id = 12345 # Fix interaction.guild_id access
         ctx.guild.default_role = MagicMock()
+
+        # Mock interaction response
+        ctx.response = MagicMock()
+        ctx.response.send_message = AsyncMock()
+        ctx.followup = MagicMock()
+        ctx.followup.send = AsyncMock()
 
         # Mock players
         player1 = MagicMock()
@@ -46,13 +54,17 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         game.gods = [ctx.author] # Host needs to be god or player to start without erroring if not in list?
         # Actually start command handles adding host to gods if not present.
 
-        # Call start
-        await bot.start(ctx)
+        ctx.user = ctx.author # Fix interaction.user access
 
-        # Verify ctx.send was called
+        # Call start
+        await bot.start.callback(ctx)
+
+        # Verify ctx.channel.send was called
         found_role_description = False
         messages = []
-        for call_args in ctx.send.call_args_list:
+
+        # Check channel messages
+        for call_args in ctx.channel.send.call_args_list:
             args, kwargs = call_args
             msg = args[0]
             messages.append(msg)
@@ -81,10 +93,18 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         ctx.author.send = AsyncMock()
         ctx.send = AsyncMock()
         ctx.channel = MagicMock()
+        ctx.channel.send = AsyncMock() # Ensure this is mocked
         ctx.channel.set_permissions = AsyncMock()
         ctx.guild = MagicMock()
         ctx.guild.id = 12345
+        ctx.guild_id = 12345 # Fix interaction.guild_id access
         ctx.guild.default_role = MagicMock()
+
+        # Mock interaction response
+        ctx.response = MagicMock()
+        ctx.response.send_message = AsyncMock()
+        ctx.followup = MagicMock()
+        ctx.followup.send = AsyncMock()
 
         # Mock players
         player1 = MagicMock()
@@ -102,12 +122,14 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         game.players = [player1, player2, player3]
         game.gods = [ctx.author]
 
+        ctx.user = ctx.author
+
         # Call start
-        await bot.start(ctx)
+        await bot.start.callback(ctx)
 
         # Check for attribution
         found_attribution = False
-        for call_args in ctx.send.call_args_list:
+        for call_args in ctx.channel.send.call_args_list:
             args, kwargs = call_args
             msg = args[0]
             if "(資料來源: [狼人殺百科](https://lrs.fandom.com/zh/wiki/局式), CC-BY-SA)" in msg:
