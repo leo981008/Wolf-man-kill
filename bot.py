@@ -235,9 +235,7 @@ async def check_game_over(channel, game):
         await announce_event(channel, game, "遊戲結束", f"獲勝者：{winner}。原因：{reason}")
 
         # 公佈身分
-        msg = "**本局玩家身分：**\n"
-        for p, r in game.roles.items():
-            msg += f"{p.name}: {r}\n"
+        msg = "**本局玩家身分：**\n" + "".join([f"{p.name}: {r}\n" for p, r in game.roles.items()])
 
         await channel.send(msg)
 
@@ -794,11 +792,12 @@ async def start(interaction: discord.Interaction):
         game.player_id_map = {}
         game.witch_potions = {'antidote': True, 'poison': True}
 
-        player_list_msg = "**本局玩家列表：**\n"
+        player_list_msg_lines = ["**本局玩家列表：**\n"]
         for idx, player in enumerate(active_players, 1):
             game.player_ids[idx] = player
             game.player_id_map[player] = idx
-            player_list_msg += f"**{idx}.** {player.name}\n"
+            player_list_msg_lines.append(f"**{idx}.** {player.name}\n")
+        player_list_msg = "".join(player_list_msg_lines)
 
     await interaction.channel.send(player_list_msg)
 
