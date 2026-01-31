@@ -1,9 +1,12 @@
 import os
 import asyncio
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from random import SystemRandom
+import random
+from ai_manager import ai_manager
 
 # 使用加密安全的隨機數產生器
 secure_random = SystemRandom()
@@ -13,8 +16,6 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # 遊戲板子配置 (從 Wiki 獲取)
-# 資料來源: 狼人殺百科 (https://lrs.fandom.com/zh/wiki/局式?variant=zh-tw)
-# 授權: CC-BY-SA
 GAME_TEMPLATES = {
     6: [
         {"name": "明牌局", "roles": ["狼人", "狼人", "預言家", "獵人", "平民", "平民"]},
@@ -67,7 +68,39 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+class WerewolfBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix='!', intents=intents, help_command=None)
+
+    async def setup_hook(self):
+        # 注意: 全域同步可能需要一小時才能生效。開發時建議同步到特定 Guild。
+        await self.tree.sync()
+        print("Slash commands synced globally.")
+
+bot = WerewolfBot()
+
+class AIPlayer:
+    def __init__(self, name):
+        self.id = random.randint(100000, 999999)
+        self.name = name
+        self.mention = f"**{name}**"
+        self.bot = True
+        self.discriminator = "0000"
+
+    async def send(self, content):
+        pass # AI logic handles input separately
+
+    async def edit(self, mute=False):
+        pass
+
+    def __str__(self):
+        return self.name
+
+    def __eq__(self, other):
+        return hasattr(other, 'id') and self.id == other.id
+
+    def __hash__(self):
+        return hash(self.id)
 
 class GameState:
     def __init__(self):
@@ -88,6 +121,10 @@ class GameState:
         self.current_speaker = None
         self.speaking_active = False
 
+        # 新增屬性
+        self.game_mode = "online" # "online" or "offline"
+        self.ai_players = []
+
     def reset(self):
         self.players = []
         self.roles = {}
@@ -103,7 +140,9 @@ class GameState:
         self.speaking_queue = []
         self.current_speaker = None
         self.speaking_active = False
-        # lock 不需要重置，沿用同一個實例
+
+        self.game_mode = "online"
+        self.ai_players = []
 
 # Guild ID -> GameState
 games = {}
@@ -115,9 +154,29 @@ def get_game(guild_id):
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} 已上線！')
+    print(f'{bot.user} 已上線！(Slash Commands Enabled)')
 
-async def check_game_over(ctx, game):
+async def announce_event(channel, game, event_type, system_msg):
+    narrative = await ai_manager.generate_narrative(event_type, system_msg)
+
+    if game.game_mode == "online":
+        await channel.send(f"🎙️ **{narrative}**\n\n({system_msg})")
+    else:
+        # 線下模式: 發送給主持人
+        host_msg = f"🔔 **主持人提示** 🔔\n請宣讀以下內容：\n> {narrative}\n\n系統訊息：{system_msg}"
+        sent = False
+        if game.creator:
+            try:
+                await game.creator.send(host_msg)
+                sent = True
+            except: pass
+
+        if not sent:
+            await channel.send(f"*(無法私訊主持人，請直接宣讀)*\n{narrative}\n({system_msg})")
+        else:
+            await channel.send(f"*(已發送台詞給主持人 {game.creator.name})*")
+
+async def check_game_over(channel, game):
     """檢查是否滿足獲勝條件 (需在 Lock 保護下呼叫)"""
     if not game.game_active:
         return
@@ -138,7 +197,7 @@ async def check_game_over(ctx, game):
     winner = None
     reason = ""
 
-    # 狼人獲勝條件：屠邊 (神職全滅 或 平民全滅)
+    # 狼人獲勝條件：屠邊
     if god_count == 0:
         winner = "狼人陣營"
         reason = "神職已全部陣亡 (屠邊)。"
@@ -153,34 +212,30 @@ async def check_game_over(ctx, game):
 
     if winner:
         game.game_active = False
-        await ctx.send(f"🏆 **遊戲結束！{winner}獲勝！**\n原因：{reason}")
+        await announce_event(channel, game, "遊戲結束", f"獲勝者：{winner}。原因：{reason}")
 
         # 公佈身分
         msg = "**本局玩家身分：**\n"
-        # 顯示所有參與過的玩家 (包括已死亡)
         for p, r in game.roles.items():
             msg += f"{p.name}: {r}\n"
 
-        await ctx.send(msg)
+        await channel.send(msg)
 
-        # 恢復發言權限
         try:
-            await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
+            await channel.set_permissions(channel.guild.default_role, send_messages=True)
         except (discord.Forbidden, discord.HTTPException):
-             await ctx.send("警告：Bot 權限不足，無法自動恢復頻道發言權限。")
+             await channel.send("警告：Bot 權限不足，無法自動恢復頻道發言權限。")
 
-        await ctx.send("請使用 `!reset` 重置遊戲以開始新的一局。")
+        await channel.send("請使用 `/reset` 重置遊戲以開始新的一局。")
 
 async def request_dm_input(player, prompt, valid_check, timeout=45):
     """私訊請求輸入的輔助函式"""
     try:
         await player.send(prompt)
         def check(m):
-            # 增加 try-except 防止 valid_check 拋出異常導致崩潰
             try:
                 if not (m.author == player and isinstance(m.channel, discord.DMChannel)):
                     return False
-                # 限制輸入長度防止濫用
                 if len(m.content) > 100:
                     return False
                 return valid_check(m.content)
@@ -192,21 +247,18 @@ async def request_dm_input(player, prompt, valid_check, timeout=45):
     except (asyncio.TimeoutError, discord.Forbidden):
         return None
     except discord.HTTPException:
-        # 處理發送失敗 (如隱私設定)
         return None
 
-async def perform_night(ctx, game):
-    """執行天黑邏輯 (循序發送私訊)"""
-    # 1. 天黑禁言
+async def perform_night(channel, game):
+    """執行天黑邏輯"""
     try:
-        await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
-        await ctx.send("🌑 **天黑請閉眼。** 夜晚行動開始，請留意私訊。")
+        await channel.set_permissions(channel.guild.default_role, send_messages=False)
+        await announce_event(channel, game, "天黑", "夜晚行動開始，請留意私訊。")
     except discord.Forbidden:
-        await ctx.send("警告：Bot 權限不足 (Manage Channels)，無法執行天黑禁言。")
+        await channel.send("警告：Bot 權限不足 (Manage Channels)，無法執行天黑禁言。")
     except discord.HTTPException:
-        await ctx.send("錯誤：設定頻道權限時發生未知錯誤。")
+        await channel.send("錯誤：設定頻道權限時發生未知錯誤。")
 
-    # 驗證 ID 的輔助函式
     def is_valid_id(content):
         if content.strip().lower() == 'no': return True
         try:
@@ -214,13 +266,22 @@ async def perform_night(ctx, game):
             return pid in game.player_ids
         except: return False
 
-    # 2. 守衛階段
+    # 統一獲取目標 ID 列表
+    all_player_ids = list(game.player_ids.keys())
+
+    # 輔助：獲取行動
+    async def get_action(player, role, prompt, targets=None):
+        if hasattr(player, 'bot') and player.bot:
+            return await ai_manager.get_ai_action(role, "夜晚行動", targets if targets else all_player_ids)
+        return await request_dm_input(player, prompt, is_valid_id)
+
+    # 守衛
     guard_protect = None
     async with game.lock:
         guard = next((p for p, r in game.roles.items() if r == "守衛" and p in game.players), None)
 
     if guard:
-        resp = await request_dm_input(guard, "🛡️ **守衛請睜眼。** 今晚要守護誰？請輸入玩家編號 (輸入 no 空守):", is_valid_id)
+        resp = await get_action(guard, "守衛", "🛡️ **守衛請睜眼。** 今晚要守護誰？請輸入玩家編號 (輸入 no 空守):")
         if resp and resp.lower() != 'no':
             guard_protect = int(resp)
             try: await guard.send(f"今晚守護了 {guard_protect} 號。")
@@ -229,21 +290,19 @@ async def perform_night(ctx, game):
             try: await guard.send("今晚不守護任何人。")
             except: pass
 
-    # 3. 狼人階段 (多數決)
+    # 狼人
     wolf_kill = None
     async with game.lock:
         wolves = [p for p, r in game.roles.items() if r == "狼人" and p in game.players]
 
     if wolves:
-        # 發送請求給所有狼人
+        # 狼人分開詢問
         tasks = []
         for wolf in wolves:
-            tasks.append(request_dm_input(wolf, "🐺 **狼人請睜眼。** 今晚要殺誰？請輸入玩家編號 (輸入 no 放棄):", is_valid_id, timeout=60))
+            prompt = "🐺 **狼人請睜眼。** 今晚要殺誰？請輸入玩家編號 (輸入 no 放棄):"
+            tasks.append(get_action(wolf, "狼人", prompt))
 
-        # 等待所有狼人回應 (或超時)
         results = await asyncio.gather(*tasks)
-
-        # 統計票數
         votes = []
         for res in results:
             if res and res.lower() != 'no':
@@ -255,9 +314,7 @@ async def perform_night(ctx, game):
             counts = Counter(votes)
             max_votes = counts.most_common(1)[0][1]
             candidates = [k for k, v in counts.items() if v == max_votes]
-            wolf_kill = secure_random.choice(candidates) # 平票隨機
-
-            # 通知狼人目標
+            wolf_kill = secure_random.choice(candidates)
             for wolf in wolves:
                 try: await wolf.send(f"今晚狼隊鎖定目標：**{wolf_kill} 號**。")
                 except: pass
@@ -266,22 +323,25 @@ async def perform_night(ctx, game):
                 try: await wolf.send("今晚狼隊沒有達成目標 (或棄刀)。")
                 except: pass
 
-    # 4. 女巫階段
+    # 女巫
     witch_save = False
     witch_poison = None
     async with game.lock:
         witch = next((p for p, r in game.roles.items() if r == "女巫" and p in game.players), None)
 
     if witch:
-        # 解藥
         use_antidote = False
         async with game.lock:
             can_use_antidote = game.witch_potions['antidote']
-
-        if can_use_antidote:
             target_msg = f"今晚 {wolf_kill} 號玩家被殺了。" if wolf_kill else "今晚是平安夜。"
+
+        # 解藥
+        if can_use_antidote:
             prompt = f"🔮 **女巫請睜眼。** {target_msg} 要使用解藥嗎？(輸入 yes/no)"
-            resp = await request_dm_input(witch, prompt, lambda c: c.strip().lower() in ['yes', 'y', 'no', 'n'])
+            if hasattr(witch, 'bot') and witch.bot:
+                resp = "yes" if wolf_kill else "no" # AI 簡單邏輯：有人死就救
+            else:
+                resp = await request_dm_input(witch, prompt, lambda c: c.strip().lower() in ['yes', 'y', 'no', 'n'])
 
             if resp and resp.strip().lower() in ['yes', 'y'] and wolf_kill:
                 witch_save = True
@@ -292,7 +352,6 @@ async def perform_night(ctx, game):
                 try: await witch.send("未使用解藥。")
                 except: pass
         else:
-             target_msg = f"今晚 {wolf_kill} 號玩家被殺了。" if wolf_kill else "今晚是平安夜。"
              try: await witch.send(f"🔮 **女巫請睜眼。** {target_msg} (解藥已用完)")
              except: pass
 
@@ -307,13 +366,14 @@ async def perform_night(ctx, game):
              can_use_poison = game.witch_potions['poison']
 
         if can_use_poison:
-            prompt = "要使用毒藥嗎？請輸入玩家編號 (輸入 no 不使用):"
-            resp = await request_dm_input(witch, prompt, is_valid_id)
+            resp = await get_action(witch, "女巫", "要使用毒藥嗎？請輸入玩家編號 (輸入 no 不使用):")
             if resp and resp.strip().lower() != 'no':
-                witch_poison = int(resp)
-                use_poison = True
-                poison_target_id = witch_poison
-                try: await witch.send(f"已對 {witch_poison} 號使用毒藥。")
+                try:
+                    witch_poison = int(resp)
+                    use_poison = True
+                    poison_target_id = witch_poison
+                    try: await witch.send(f"已對 {witch_poison} 號使用毒藥。")
+                    except: pass
                 except: pass
             else:
                 try: await witch.send("未使用毒藥。")
@@ -323,12 +383,12 @@ async def perform_night(ctx, game):
              async with game.lock:
                 game.witch_potions['poison'] = False
 
-    # 5. 預言家階段
+    # 預言家
     async with game.lock:
         seer = next((p for p, r in game.roles.items() if r == "預言家" and p in game.players), None)
 
     if seer:
-        resp = await request_dm_input(seer, "🔮 **預言家請睜眼。** 今晚要查驗誰？請輸入玩家編號:", is_valid_id)
+        resp = await get_action(seer, "預言家", "🔮 **預言家請睜眼。** 今晚要查驗誰？請輸入玩家編號:")
         if resp and resp.strip().lower() != 'no':
             target_id = int(resp)
             async with game.lock:
@@ -344,24 +404,17 @@ async def perform_night(ctx, game):
             try: await seer.send("今晚未查驗。")
             except: pass
 
-    # 結算死亡名單
+    # 結算
     dead_ids = set()
-
-    # 狼刀
     if wolf_kill:
         is_guarded = (wolf_kill == guard_protect)
         is_saved = witch_save
-
-        if is_guarded and is_saved:
-            pass
+        if is_guarded and is_saved: pass # 奶穿
         elif not is_guarded and not is_saved:
             dead_ids.add(wolf_kill)
-
-    # 女巫毒
     if witch_poison:
         dead_ids.add(witch_poison)
 
-    # 轉換為玩家物件
     dead_players_list = []
     async with game.lock:
         for did in dead_ids:
@@ -369,41 +422,73 @@ async def perform_night(ctx, game):
             if p and p in game.players:
                 dead_players_list.append(p)
 
-    await perform_day(ctx, game, dead_players_list)
+    await perform_day(channel, game, dead_players_list)
 
 async def set_player_mute(member, mute=True):
-    """安全地設定玩家靜音狀態"""
-    if not member.voice:
-        return
-    try:
-        await member.edit(mute=mute)
-    except (discord.Forbidden, discord.HTTPException):
-        pass # 忽略權限錯誤或網路錯誤
+    if not member.voice: return
+    try: await member.edit(mute=mute)
+    except: pass
 
-async def mute_all_players(ctx, game):
-    """將所有存活玩家靜音 (需在 Lock 外執行 I/O)"""
+async def mute_all_players(channel, game):
     players_to_mute = []
     async with game.lock:
         players_to_mute = list(game.players)
-
-    tasks = []
-    for p in players_to_mute:
-        tasks.append(set_player_mute(p, True))
+    tasks = [set_player_mute(p, True) for p in players_to_mute]
     await asyncio.gather(*tasks)
 
-async def unmute_all_players(ctx, game):
-    """解除所有存活玩家靜音"""
+async def unmute_all_players(channel, game):
     players_to_unmute = []
     async with game.lock:
         players_to_unmute = list(game.players)
-
-    tasks = []
-    for p in players_to_unmute:
-        tasks.append(set_player_mute(p, False))
+    tasks = [set_player_mute(p, False) for p in players_to_unmute]
     await asyncio.gather(*tasks)
 
-async def start_next_turn(ctx, game):
-    """開始下一位玩家的發言"""
+async def perform_ai_voting(channel, game):
+    await asyncio.sleep(5)
+
+    ai_voters = []
+    async with game.lock:
+        if not game.game_active or game.speaking_active: return
+        ai_voters = [p for p in game.ai_players if p in game.players and p not in game.voted_players]
+        all_targets = list(game.player_ids.keys())
+
+    if not ai_voters: return
+
+    for ai_player in ai_voters:
+        await asyncio.sleep(random.uniform(1, 3))
+
+        target_id = await ai_manager.get_ai_action("平民", "白天投票階段", all_targets)
+
+        target_member = None
+        is_abstain = (str(target_id).strip().lower() == "no")
+        if not is_abstain and str(target_id).isdigit():
+             target_member = game.player_ids.get(int(target_id))
+
+        should_resolve = False
+        async with game.lock:
+            if ai_player in game.voted_players: continue
+
+            if is_abstain:
+                game.voted_players.add(ai_player)
+                await channel.send(f"{ai_player.mention} 投了廢票。")
+            else:
+                if target_member and target_member in game.players:
+                    if target_member not in game.votes:
+                        game.votes[target_member] = 0
+                    game.votes[target_member] += 1
+                    game.voted_players.add(ai_player)
+                    await channel.send(f"{ai_player.mention} 投票給了 {target_member.mention}。")
+                else:
+                    game.voted_players.add(ai_player)
+                    await channel.send(f"{ai_player.mention} 投了廢票 (無效目標)。")
+
+            if len(game.voted_players) == len(game.players):
+                should_resolve = True
+
+        if should_resolve:
+            await resolve_votes(channel, game)
+
+async def start_next_turn(channel, game):
     next_player = None
     remaining_count = 0
 
@@ -411,145 +496,207 @@ async def start_next_turn(ctx, game):
         if not game.speaking_queue:
             game.speaking_active = False
             game.current_speaker = None
-            await ctx.send("🎙️ **發言階段結束！** 現在可以自由討論與投票。")
-
-            # 解除所有人的靜音
-            asyncio.create_task(unmute_all_players(ctx, game))
+            await channel.send("🎙️ **發言階段結束！** 現在可以自由討論與投票。")
+            asyncio.create_task(unmute_all_players(channel, game))
+            asyncio.create_task(perform_ai_voting(channel, game))
             return
 
         next_player = game.speaking_queue.pop(0)
         game.current_speaker = next_player
         remaining_count = len(game.speaking_queue)
 
-    # 執行 I/O
-    await set_player_mute(next_player, False) # 解除當前發言者靜音
+    await set_player_mute(next_player, False)
 
     pid = "未知"
+    role = "未知"
     async with game.lock:
         pid = game.player_id_map.get(next_player, "未知")
+        role = game.roles.get(next_player, "平民")
 
-    await ctx.send(f"🎙️ 輪到 **{pid} 號 {next_player.mention}** 發言。 (剩餘 {remaining_count} 人等待)\n請發言完畢後輸入 `!done` 結束回合。")
+    await channel.send(f"🎙️ 輪到 **{pid} 號 {next_player.mention}** 發言。 (剩餘 {remaining_count} 人等待)\n請發言完畢後輸入 `/done` 結束回合。")
 
+    if hasattr(next_player, 'bot') and next_player.bot:
+        await asyncio.sleep(random.uniform(2, 5))
+        speech = await ai_manager.get_ai_speech(pid, role, "白天發言")
+        await channel.send(f"🗣️ **{next_player.name}**: {speech}")
+        await asyncio.sleep(random.uniform(2, 4))
 
-async def perform_day(ctx, game, dead_players=[]):
-    """執行天亮邏輯"""
+        await channel.send(f"*(AI {next_player.name} 發言結束)*")
+        await set_player_mute(next_player, True)
+        await start_next_turn(channel, game)
+
+async def perform_day(channel, game, dead_players=[]):
     try:
-        await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
-    except discord.Forbidden:
-        await ctx.send("權限不足，無法修改頻道權限。")
-    except discord.HTTPException:
-        pass
+        await channel.set_permissions(channel.guild.default_role, send_messages=True)
+    except: pass
 
     msg = "🌞 **天亮了！** 請開始討論。\n"
-
     game_over = False
     async with game.lock:
         if dead_players:
             names = ", ".join([p.name for p in dead_players])
             msg += f"昨晚死亡的是：**{names}**"
-
             for p in dead_players:
                 if p in game.players:
                     game.players.remove(p)
         else:
             msg += "昨晚是平安夜。"
 
-        await check_game_over(ctx, game)
+        await check_game_over(channel, game)
         game_over = not game.game_active
 
-    await ctx.send(msg)
+    await announce_event(channel, game, "天亮", msg)
 
     if not game_over:
-        # 初始化發言階段
-        await ctx.send("🔊 **進入依序發言階段**，正在隨機排序並設定靜音...")
-
+        await channel.send("🔊 **進入依序發言階段**，正在隨機排序並設定靜音...")
         async with game.lock:
             game.speaking_queue = list(game.players)
             secure_random.shuffle(game.speaking_queue)
             game.speaking_active = True
             game.current_speaker = None
 
-        # 先將所有人靜音
-        await mute_all_players(ctx, game)
+        await mute_all_players(channel, game)
+        await start_next_turn(channel, game)
 
-        # 開始第一位
-        await start_next_turn(ctx, game)
+async def resolve_votes(channel, game):
+    async with game.lock:
+        if not game.votes:
+            await channel.send("所有人均投廢票 (Abstain)，無人死亡。")
+            game.votes = {}
+            game.voted_players = set()
+            return
 
+        max_votes = max(game.votes.values())
+        candidates = [p for p, c in game.votes.items() if c == max_votes]
 
-@bot.command()
-@commands.cooldown(1, 2, commands.BucketType.user)
-async def join(ctx):
-    """加入遊戲"""
-    game = get_game(ctx.guild.id)
+    if len(candidates) > 1:
+        names = ", ".join([p.name for p in candidates])
+        await channel.send(f"平票！({names}) 均為 {max_votes} 票。請重新投票。")
+        async with game.lock:
+            game.votes = {}
+            game.voted_players = set()
+    else:
+        victim = candidates[0]
+        await channel.send(f"投票結束！**{victim.name}** 以 {max_votes} 票被處決。")
+
+        async with game.lock:
+            if victim in game.players:
+                game.players.remove(victim)
+            game.votes = {}
+            game.voted_players = set()
+            await check_game_over(channel, game)
+
+# Slash Commands
+
+@bot.tree.command(name="join", description="加入遊戲")
+async def join(interaction: discord.Interaction):
+    game = get_game(interaction.guild_id)
 
     async with game.lock:
         if game.game_active:
-            await ctx.send("遊戲已經開始，無法加入。")
+            await interaction.response.send_message("遊戲已經開始，無法加入。", ephemeral=True)
             return
 
-        if ctx.author in game.gods:
-            game.gods.remove(ctx.author)
-            await ctx.send(f"{ctx.author.mention} 已從天神轉為玩家。")
+        if interaction.user in game.gods:
+            game.gods.remove(interaction.user)
+            await interaction.channel.send(f"{interaction.user.mention} 已從天神轉為玩家。")
 
-        if ctx.author in game.players:
-            await ctx.send(f"{ctx.author.mention} 你已經在玩家列表中了。")
+        if interaction.user in game.players:
+            await interaction.response.send_message("你已經在玩家列表中了。", ephemeral=True)
         else:
             if len(game.players) >= 20:
-                await ctx.send("人數已達上限 (20人)。")
+                await interaction.response.send_message("人數已達上限 (20人)。", ephemeral=True)
                 return
 
             if not game.players and not game.gods:
-                game.creator = ctx.author
+                game.creator = interaction.user
 
-            game.players.append(ctx.author)
-            await ctx.send(f"{ctx.author.mention} 加入了遊戲！目前人數: {len(game.players)}")
+            game.players.append(interaction.user)
+            await interaction.response.send_message(f"{interaction.user.mention} 加入了遊戲！目前人數: {len(game.players)}")
 
-@bot.command()
-@commands.cooldown(1, 2, commands.BucketType.user)
-async def god(ctx):
-    """轉為天神 (旁觀者)"""
-    game = get_game(ctx.guild.id)
+@bot.tree.command(name="addbot", description="加入 AI 玩家")
+async def addbot(interaction: discord.Interaction, count: int):
+    game = get_game(interaction.guild_id)
+    if game.game_active:
+        await interaction.response.send_message("遊戲已開始，無法加入。", ephemeral=True)
+        return
+
+    if len(game.players) + count > 20:
+        await interaction.response.send_message("人數將超過上限 (20)。", ephemeral=True)
+        return
+
+    added_names = []
+    async with game.lock:
+        for i in range(count):
+            name = f"AI-{len(game.players)+1}"
+            ai_p = AIPlayer(name)
+            game.players.append(ai_p)
+            game.ai_players.append(ai_p)
+            added_names.append(name)
+
+            if not game.creator:
+                game.creator = interaction.user
+
+    await interaction.response.send_message(f"已加入 {count} 名 AI 玩家: {', '.join(added_names)}")
+
+@bot.tree.command(name="mode", description="設定遊戲模式")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="線上模式 (AI主持)", value="online"),
+    app_commands.Choice(name="線下模式 (AI場控)", value="offline")
+])
+async def mode(interaction: discord.Interaction, mode: app_commands.Choice[str]):
+    game = get_game(interaction.guild_id)
+    async with game.lock:
+        game.game_mode = mode.value
+
+    desc = "AI 將負責主持遊戲並在頻道發送訊息。" if mode.value == "online" else "AI 將協助主持人，透過私訊發送流程提示。"
+    await interaction.response.send_message(f"遊戲模式已設定為：**{mode.name}**\n{desc}")
+
+@bot.tree.command(name="god", description="轉為天神 (旁觀者)")
+async def god(interaction: discord.Interaction):
+    game = get_game(interaction.guild_id)
 
     async with game.lock:
-        if ctx.author in game.players:
-            game.players.remove(ctx.author)
-            await ctx.send(f"{ctx.author.mention} 已從玩家轉為天神。")
+        if interaction.user in game.players:
+            game.players.remove(interaction.user)
+            await interaction.channel.send(f"{interaction.user.mention} 已從玩家轉為天神。")
 
-        if ctx.author not in game.gods:
+        if interaction.user not in game.gods:
             if not game.players and not game.gods:
-                game.creator = ctx.author
-
-            game.gods.append(ctx.author)
-            await ctx.send(f"{ctx.author.mention} 已加入天神組 (God)！")
+                game.creator = interaction.user
+            game.gods.append(interaction.user)
+            await interaction.response.send_message(f"{interaction.user.mention} 已加入天神組 (God)！")
         else:
-            await ctx.send(f"{ctx.author.mention} 你已經是天神了。")
+            await interaction.response.send_message("你已經是天神了。", ephemeral=True)
 
-@bot.command()
-@commands.cooldown(1, 10, commands.BucketType.guild)
-@commands.max_concurrency(1, commands.BucketType.guild)
-async def start(ctx):
-    """開始遊戲 (分配身分並進入天黑狀態)"""
-    game = get_game(ctx.guild.id)
+@bot.tree.command(name="start", description="開始遊戲")
+@app_commands.checks.cooldown(1, 10)
+async def start(interaction: discord.Interaction):
+    game = get_game(interaction.guild_id)
+
+    # 檢查並發 (簡單檢查)
+    if game.game_active:
+        await interaction.response.send_message("遊戲已經在進行中。", ephemeral=True)
+        return
+
+    await interaction.response.send_message("正在準備遊戲...")
 
     async with game.lock:
+        # 重複檢查，避免 Race Condition
         if game.game_active:
-            await ctx.send("遊戲已經在進行中。")
+            await interaction.followup.send("遊戲已經在進行中。")
             return
 
-        if ctx.author in game.players:
-            game.players.remove(ctx.author)
-            await ctx.send(f"{ctx.author.mention} 已轉為天神 (God)，不參與遊戲。")
+        if interaction.user in game.players:
+            game.players.remove(interaction.user)
+            await interaction.channel.send(f"{interaction.user.mention} 已轉為天神 (God)，不參與遊戲。")
 
-        if ctx.author not in game.gods:
-            game.gods.append(ctx.author)
+        if interaction.user not in game.gods:
+            game.gods.append(interaction.user)
 
         current_player_count = len(game.players)
         if current_player_count < 3:
-            await ctx.send("人數不足，至少需要 3 人 (不含天神) 才能開始。")
-            return
-
-        if current_player_count > 20:
-            await ctx.send("人數過多，本遊戲最多支援 20 人。")
+            await interaction.followup.send("人數不足，至少需要 3 人 (不含天神) 才能開始。")
             return
 
         game.game_active = True
@@ -557,35 +704,60 @@ async def start(ctx):
         game.votes = {}
         game.voted_players = set()
 
-        # ... (Role Setup Logic - No changes to logic, just indentation)
-        if current_player_count < 6:
-            werewolf_count = 1
-            seer_count = 1
-            villager_count = current_player_count - werewolf_count - seer_count
-            role_pool = ["狼人"] * werewolf_count + ["預言家"] * seer_count + ["平民"] * villager_count
-            template_name = f"{current_player_count}人 基礎局"
-            active_players = game.players.copy()
-        else:
-            supported_counts = sorted(GAME_TEMPLATES.keys(), reverse=True)
-            target_count = 0
-            for count in supported_counts:
-                if current_player_count >= count:
-                    target_count = count
-                    break
+        role_pool = []
+        template_name = "未知"
+        active_players = []
 
-            secure_random.shuffle(game.players)
-            active_players = game.players[:target_count]
-            excess_players = game.players[target_count:]
-            game.players[:] = active_players
-
-            for p in excess_players:
-                game.gods.append(p)
-                await ctx.send(f"{p.mention} 因人數超出板子 ({target_count}人)，自動轉為天神。")
-
-            templates = GAME_TEMPLATES[target_count]
+        if current_player_count in GAME_TEMPLATES:
+            # 標準人數，使用既定板子
+            templates = GAME_TEMPLATES[current_player_count]
             selected_template = secure_random.choice(templates)
             role_pool = selected_template["roles"].copy()
-            template_name = f"{target_count}人 {selected_template['name']}"
+            template_name = f"{current_player_count}人 {selected_template['name']}"
+            active_players = game.players.copy()
+        else:
+            if current_player_count < 6:
+                werewolf_count = 1
+                seer_count = 1
+                villager_count = current_player_count - werewolf_count - seer_count
+                role_pool = ["狼人"] * werewolf_count + ["預言家"] * seer_count + ["平民"] * villager_count
+                template_name = f"{current_player_count}人 基礎局"
+                active_players = game.players.copy()
+            else:
+                # 嘗試 AI 生成
+                await interaction.channel.send("⚠️ 偵測到非標準人數，正在請求 AI 生成平衡板子...")
+                generated_roles = await ai_manager.generate_role_template(current_player_count, list(ROLE_DESCRIPTIONS.keys()))
+
+                if generated_roles:
+                    role_pool = generated_roles
+                    template_name = f"{current_player_count}人 AI 生成局"
+                    active_players = game.players.copy()
+                else:
+                    # AI 失敗，回退到標準縮減邏輯
+                    await interaction.channel.send("AI 生成失敗或連線逾時，切換為標準板子縮減模式。")
+                    supported_counts = sorted(GAME_TEMPLATES.keys(), reverse=True)
+                    target_count = 0
+                    for count in supported_counts:
+                        if current_player_count >= count:
+                            target_count = count
+                            break
+
+                    if target_count == 0:
+                        target_count = 6
+
+                    secure_random.shuffle(game.players)
+                    active_players = game.players[:target_count]
+                    excess_players = game.players[target_count:]
+                    game.players[:] = active_players
+
+                    for p in excess_players:
+                        game.gods.append(p)
+                        await interaction.channel.send(f"{p.mention} 因人數超出板子 ({target_count}人)，自動轉為天神。")
+
+                    templates = GAME_TEMPLATES[target_count]
+                    selected_template = secure_random.choice(templates)
+                    role_pool = selected_template["roles"].copy()
+                    template_name = f"{target_count}人 {selected_template['name']}"
 
         secure_random.shuffle(role_pool)
         game.player_ids = {}
@@ -598,117 +770,78 @@ async def start(ctx):
             game.player_id_map[player] = idx
             player_list_msg += f"**{idx}.** {player.name}\n"
 
-    await ctx.send(player_list_msg)
+    await interaction.channel.send(player_list_msg)
 
     role_summary = []
     for player, role in zip(active_players, role_pool):
-        # game.roles access should technically be locked if players can change, but active=True prevents changes
-        # Adding lock for strictness
         async with game.lock:
              game.roles[player] = role
-
         pid = game.player_id_map[player]
         role_summary.append(f"{pid}. {player.name}: {role}")
-
         try:
             description = ROLE_DESCRIPTIONS.get(role, "暫無說明")
             msg = f"您的編號是：**{pid}**\n您的身分是：**{role}**\n\n**功能說明：**\n{description}"
             await player.send(msg)
-        except (discord.Forbidden, discord.HTTPException):
-            await ctx.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
+        except:
+            if not hasattr(player, 'bot') or not player.bot:
+                await interaction.channel.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
 
     summary_msg = f"**本局板子：{template_name}**\n**本局身分列表：**\n" + "\n".join(role_summary)
     for god in game.gods:
-        try:
-            await god.send(summary_msg)
-        except (discord.Forbidden, discord.HTTPException):
-            await ctx.send(f"無法發送私訊給天神 {god.mention}。")
+        try: await god.send(summary_msg)
+        except: pass
 
-    await ctx.send(f"遊戲開始！使用板子：**{template_name}** (資料來源: [狼人殺百科](https://lrs.fandom.com/zh/wiki/局式), CC-BY-SA)。身分與編號已發送給所有天神與玩家。")
+    await announce_event(interaction.channel, game, "遊戲開始", f"使用板子：{template_name}")
+    await perform_night(interaction.channel, game)
 
-    unique_roles = set(role_pool)
-    role_help_msg = "**本局角色功能說明：**\n"
-    for role in ROLE_DESCRIPTIONS:
-        if role in unique_roles:
-            role_help_msg += f"**{role}**：{ROLE_DESCRIPTIONS[role]}\n"
-    for role in unique_roles:
-        if role not in ROLE_DESCRIPTIONS:
-            role_help_msg += f"**{role}**：暫無說明\n"
-    await ctx.send(role_help_msg)
+@bot.tree.command(name="day", description="切換到天亮 (限管理員)")
+@app_commands.checks.has_permissions(administrator=True)
+async def day(interaction: discord.Interaction):
+    game = get_game(interaction.guild_id)
+    await interaction.response.send_message("切換至天亮。", ephemeral=True)
+    await perform_day(interaction.channel, game)
 
-    await perform_night(ctx, game)
+@bot.tree.command(name="night", description="切換到天黑 (限管理員)")
+@app_commands.checks.has_permissions(administrator=True)
+async def night(interaction: discord.Interaction):
+    game = get_game(interaction.guild_id)
+    await interaction.response.send_message("切換至天黑。", ephemeral=True)
+    await perform_night(interaction.channel, game)
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def day(ctx):
-    """切換到天亮 (開啟發言權限，限管理員)"""
-    game = get_game(ctx.guild.id)
-    await perform_day(ctx, game)
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def night(ctx):
-    """切換到天黑 (關閉發言權限，限管理員)"""
-    game = get_game(ctx.guild.id)
-    await perform_night(ctx, game)
-
-@bot.command()
-async def die(ctx, *, target: str):
-    """天神指令：處決玩家 (輸入編號)"""
-    game = get_game(ctx.guild.id)
-
-    is_admin = ctx.author.guild_permissions.administrator
-    is_creator = (game.creator == ctx.author)
+@bot.tree.command(name="die", description="天神處決玩家")
+async def die(interaction: discord.Interaction, target: str):
+    game = get_game(interaction.guild_id)
+    is_admin = interaction.user.guild_permissions.administrator
+    is_creator = (game.creator == interaction.user)
 
     if not (is_admin or is_creator):
-        await ctx.send("權限不足：只有房主或管理員可以使用此指令。")
+        await interaction.response.send_message("權限不足。", ephemeral=True)
         return
 
     target_member = None
     if target.isdigit():
         target_member = game.player_ids.get(int(target))
-    if not target_member:
-        try:
-            target_member = await commands.MemberConverter().convert(ctx, target)
-        except commands.BadArgument:
-            pass
+    # Slash command target usually Member, but keeping str for ID support
+    # If we used discord.Member type hint, we'd get a member object directly.
+    # But current logic supports IDs. Let's keep it flexible or use Member converter manually.
 
     if not target_member:
-        await ctx.send(f"找不到玩家 `{target}` (請輸入編號或名稱)。")
+        await interaction.response.send_message(f"找不到玩家 ID {target}", ephemeral=True)
         return
 
     async with game.lock:
         if target_member not in game.players:
-            await ctx.send("該玩家不在遊戲中或已經死亡。")
+            await interaction.response.send_message("該玩家不在遊戲中。", ephemeral=True)
             return
-
         game.players.remove(target_member)
-        await check_game_over(ctx, game)
+        await check_game_over(interaction.channel, game)
 
-    await ctx.send(f"👑 天神執行了處決，**{target_member.name}** 已死亡。")
+    await interaction.response.send_message(f"👑 天神執行了處決，**{target_member.name}** 已死亡。")
 
-    living_status = "**目前存活玩家與身分：**\n"
-    async with game.lock:
-        for p in game.players:
-            r = game.roles.get(p, "未知")
-            living_status += f"{p.name}: {r}\n"
-        dead_player_role = game.roles.get(target_member, "未知")
+@bot.tree.command(name="done", description="結束發言")
+async def done(interaction: discord.Interaction):
+    game = get_game(interaction.guild_id)
 
-    god_notification = f"💀 **{target_member.name}** ({dead_player_role}) 已死亡。\n{living_status}"
-
-    for g in game.gods:
-        try:
-            await g.send(god_notification)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-
-@bot.command()
-async def done(ctx):
-    """結束發言 (僅限當前發言玩家)"""
-    game = get_game(ctx.guild.id)
-
-    # 檢查是否在發言階段
     is_speaking = False
     current_speaker = None
     async with game.lock:
@@ -716,165 +849,94 @@ async def done(ctx):
         current_speaker = game.current_speaker
 
     if not is_speaking:
-        await ctx.send("現在不是發言階段。")
+        await interaction.response.send_message("現在不是發言階段。", ephemeral=True)
         return
 
-    # 檢查權限 (當前發言者 或 管理員/房主)
-    is_speaker = (ctx.author == current_speaker)
-    is_admin = ctx.author.guild_permissions.administrator
-    is_creator = (game.creator == ctx.author)
+    if interaction.user != current_speaker:
+        is_admin = interaction.user.guild_permissions.administrator
+        is_creator = (game.creator == interaction.user)
+        if not (is_admin or is_creator):
+             await interaction.response.send_message(f"現在是 {current_speaker.mention} 的發言時間。", ephemeral=True)
+             return
+        else:
+             await interaction.channel.send(f"管理員/房主強制結束了 {current_speaker.name} 的發言。")
 
-    if not (is_speaker or is_admin or is_creator):
-        await ctx.send(f"現在是 {current_speaker.mention} 的發言時間。")
-        return
-
-    if is_admin or is_creator and not is_speaker:
-        await ctx.send(f"管理員/房主強制結束了 {current_speaker.name} 的發言。")
-
-    # 將當前發言者靜音
+    await interaction.response.send_message("發言結束。")
     if current_speaker:
         await set_player_mute(current_speaker, True)
+    await start_next_turn(interaction.channel, game)
 
-    # 進行下一位
-    await start_next_turn(ctx, game)
-
-async def resolve_votes(ctx, game):
-    """結算投票結果 (不應持有 Lock 呼叫)"""
-    async with game.lock:
-        if not game.votes:
-            await ctx.send("所有人均投廢票 (Abstain)，無人死亡。")
-            game.votes = {}
-            game.voted_players = set()
-            return
-
-        max_votes = max(game.votes.values())
-        candidates = [p for p, c in game.votes.items() if c == max_votes]
-
-    if len(candidates) > 1:
-        names = ", ".join([p.name for p in candidates])
-        await ctx.send(f"平票！({names}) 均為 {max_votes} 票。請重新投票。")
-        async with game.lock:
-            game.votes = {}
-            game.voted_players = set()
-    else:
-        victim = candidates[0]
-        await ctx.send(f"投票結束！**{victim.name}** 以 {max_votes} 票被處決。")
-
-        async with game.lock:
-            if victim in game.players:
-                game.players.remove(victim)
-
-            game.votes = {}
-            game.voted_players = set()
-
-            await check_game_over(ctx, game)
-
-@bot.command()
-@commands.cooldown(1, 1, commands.BucketType.user)
-async def vote(ctx, *, target: str):
-    """投票 [玩家] 或 [no] (廢票)"""
-    game = get_game(ctx.guild.id)
+@bot.tree.command(name="vote", description="投票")
+async def vote(interaction: discord.Interaction, target_id: str):
+    game = get_game(interaction.guild_id)
 
     if not game.game_active:
-        await ctx.send("遊戲尚未開始。")
+        await interaction.response.send_message("遊戲尚未開始。", ephemeral=True)
         return
 
-    # 檢查是否在發言階段
     async with game.lock:
         if game.speaking_active:
-            await ctx.send("現在是發言階段，請等待發言結束後再投票。")
+            await interaction.response.send_message("請等待發言結束。", ephemeral=True)
             return
 
-    if ctx.author not in game.players:
-        await ctx.send("你沒有參與這場遊戲。")
+    if interaction.user not in game.players:
+        await interaction.response.send_message("你沒有參與遊戲。", ephemeral=True)
         return
 
+    is_abstain = (target_id.strip().lower() == "no")
     target_member = None
-    is_abstain = (target.strip().lower() == "no")
-
     if not is_abstain:
-        if len(target) > 100:
-             await ctx.send("輸入過長。")
+        if target_id.isdigit():
+            target_member = game.player_ids.get(int(target_id))
+        if not target_member:
+             await interaction.response.send_message("無效的玩家編號。", ephemeral=True)
              return
-
-        if target.isdigit():
-            target_member = game.player_ids.get(int(target))
-
-        if not target_member:
-            try:
-                target_member = await commands.MemberConverter().convert(ctx, target)
-            except commands.BadArgument:
-                pass
-
-        if not target_member:
-            await ctx.send(f"找不到玩家 `{target}` (請輸入編號或名稱)。")
-            return
 
     should_resolve = False
     async with game.lock:
-        if ctx.author in game.voted_players:
-            await ctx.send(f"{ctx.author.mention} 你已經投過票了！")
+        if interaction.user in game.voted_players:
+            await interaction.response.send_message("你已經投過票了。", ephemeral=True)
             return
 
         if is_abstain:
-            game.voted_players.add(ctx.author)
-            await ctx.send(f"{ctx.author.mention} 投了廢票 (Abstain)。")
+            game.voted_players.add(interaction.user)
+            await interaction.response.send_message(f"{interaction.user.mention} 投了廢票。")
         else:
             if target_member not in game.players:
-                await ctx.send("該玩家不在遊戲中。")
+                await interaction.response.send_message("該玩家不在遊戲中。", ephemeral=True)
                 return
-
             if target_member not in game.votes:
                 game.votes[target_member] = 0
-
             game.votes[target_member] += 1
-            game.voted_players.add(ctx.author)
-            await ctx.send(f"{ctx.author.mention} 投票給了 {target_member.mention}！")
+            game.voted_players.add(interaction.user)
+            await interaction.response.send_message(f"{interaction.user.mention} 投票成功。")
 
         if len(game.voted_players) == len(game.players):
             should_resolve = True
 
     if should_resolve:
-        await resolve_votes(ctx, game)
+        await resolve_votes(interaction.channel, game)
 
-@bot.command()
-@commands.cooldown(1, 5, commands.BucketType.guild)
-async def reset(ctx):
-    """重置遊戲狀態"""
-    game = get_game(ctx.guild.id)
-
-    is_admin = ctx.author.guild_permissions.administrator
-    is_creator = (game.creator == ctx.author)
+@bot.tree.command(name="reset", description="重置遊戲")
+async def reset(interaction: discord.Interaction):
+    game = get_game(interaction.guild_id)
+    is_admin = interaction.user.guild_permissions.administrator
+    is_creator = (game.creator == interaction.user)
 
     if not (is_admin or is_creator):
-        await ctx.send("權限不足：只有房主 (最早加入者) 或管理員可以重置遊戲。")
+        await interaction.response.send_message("權限不足。", ephemeral=True)
         return
 
     async with game.lock:
         game.reset()
 
-    try:
-        await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+    try: await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=True)
+    except: pass
 
-    await ctx.send("遊戲已重置。")
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("權限不足：此指令僅限管理員使用。")
-    elif isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"指令冷卻中，請稍後再試 ({error.retry_after:.1f}秒)。")
-    elif isinstance(error, commands.MaxConcurrencyReached):
-        await ctx.send("該指令正在執行中，請勿重複觸發。")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("指令參數錯誤，請檢查用法。")
-    else:
-        print(f"Error: {error}")
+    await interaction.response.send_message("遊戲已重置。")
 
 if __name__ == "__main__":
     if TOKEN:
         bot.run(TOKEN)
     else:
-        print("錯誤: 未找到 DISCORD_TOKEN，請檢查 .env 檔案。")
+        print("錯誤: 未找到 DISCORD_TOKEN")
