@@ -9,6 +9,7 @@ def mock_ctx():
     ctx.guild.id = 999
     ctx.send = AsyncMock()
     ctx.channel.set_permissions = AsyncMock()
+    ctx.set_permissions = AsyncMock()
     ctx.guild.default_role = MagicMock()
     return ctx
 
