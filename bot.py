@@ -297,137 +297,161 @@ async def perform_night(channel, game):
         return await request_dm_input(player, prompt, is_valid_id)
 
     # 守衛
-    guard_protect = None
-    async with game.lock:
-        guard_candidates = game.role_to_players.get("守衛", [])
-        guard = next((p for p in guard_candidates if p in game.players), None)
+    async def run_guard():
+        guard_protect = None
+        async with game.lock:
+            guard_candidates = game.role_to_players.get("守衛", [])
+            guard = next((p for p in guard_candidates if p in game.players), None)
 
-    if guard:
-        resp = await get_action(guard, "守衛", "🛡️ **守衛請睜眼。** 今晚要守護誰？請輸入玩家編號 (輸入 no 空守):")
-        if resp and resp.lower() != 'no':
-            guard_protect = int(resp)
-            try: await guard.send(f"今晚守護了 {guard_protect} 號。")
-            except: pass
-        else:
-            try: await guard.send("今晚不守護任何人。")
-            except: pass
+        if guard:
+            resp = await get_action(guard, "守衛", "🛡️ **守衛請睜眼。** 今晚要守護誰？請輸入玩家編號 (輸入 no 空守):")
+            if resp and resp.lower() != 'no':
+                guard_protect = int(resp)
+                try: await guard.send(f"今晚守護了 {guard_protect} 號。")
+                except: pass
+            else:
+                try: await guard.send("今晚不守護任何人。")
+                except: pass
+        return guard_protect
 
     # 狼人
-    wolf_kill = None
-    async with game.lock:
-        wolf_candidates = game.role_to_players.get("狼人", [])
-        wolves = [p for p in wolf_candidates if p in game.players]
+    async def run_wolf():
+        wolf_kill = None
+        async with game.lock:
+            wolf_candidates = game.role_to_players.get("狼人", [])
+            wolves = [p for p in wolf_candidates if p in game.players]
 
-    if wolves:
-        # 狼人分開詢問
-        tasks = []
-        for wolf in wolves:
-            prompt = "🐺 **狼人請睜眼。** 今晚要殺誰？請輸入玩家編號 (輸入 no 放棄):"
-            tasks.append(get_action(wolf, "狼人", prompt))
-
-        results = await asyncio.gather(*tasks)
-        votes = []
-        for res in results:
-            if res and res.lower() != 'no':
-                try: votes.append(int(res))
-                except: pass
-
-        if votes:
-            from collections import Counter
-            counts = Counter(votes)
-            max_votes = counts.most_common(1)[0][1]
-            candidates = [k for k, v in counts.items() if v == max_votes]
-            wolf_kill = secure_random.choice(candidates)
+        if wolves:
+            # 狼人分開詢問
+            tasks = []
             for wolf in wolves:
-                try: await wolf.send(f"今晚狼隊鎖定目標：**{wolf_kill} 號**。")
-                except: pass
-        else:
-             for wolf in wolves:
-                try: await wolf.send("今晚狼隊沒有達成目標 (或棄刀)。")
-                except: pass
+                prompt = "🐺 **狼人請睜眼。** 今晚要殺誰？請輸入玩家編號 (輸入 no 放棄):"
+                tasks.append(get_action(wolf, "狼人", prompt))
+
+            results = await asyncio.gather(*tasks)
+            votes = []
+            for res in results:
+                if res and res.lower() != 'no':
+                    try: votes.append(int(res))
+                    except: pass
+
+            if votes:
+                from collections import Counter
+                counts = Counter(votes)
+                max_votes = counts.most_common(1)[0][1]
+                candidates = [k for k, v in counts.items() if v == max_votes]
+                wolf_kill = secure_random.choice(candidates)
+                for wolf in wolves:
+                    try: await wolf.send(f"今晚狼隊鎖定目標：**{wolf_kill} 號**。")
+                    except: pass
+            else:
+                 for wolf in wolves:
+                    try: await wolf.send("今晚狼隊沒有達成目標 (或棄刀)。")
+                    except: pass
+        return wolf_kill
 
     # 女巫
-    witch_save = False
-    witch_poison = None
-    async with game.lock:
-        witch_candidates = game.role_to_players.get("女巫", [])
-        witch = next((p for p in witch_candidates if p in game.players), None)
-
-    if witch:
-        use_antidote = False
+    async def run_witch(wolf_kill):
+        witch_save = False
+        witch_poison = None
         async with game.lock:
-            can_use_antidote = game.witch_potions['antidote']
-            target_msg = f"今晚 {wolf_kill} 號玩家被殺了。" if wolf_kill else "今晚是平安夜。"
+            witch_candidates = game.role_to_players.get("女巫", [])
+            witch = next((p for p in witch_candidates if p in game.players), None)
 
-        # 解藥
-        if can_use_antidote:
-            prompt = f"🔮 **女巫請睜眼。** {target_msg} 要使用解藥嗎？(輸入 yes/no)"
-            if hasattr(witch, 'bot') and witch.bot:
-                resp = "yes" if wolf_kill else "no" # AI 簡單邏輯：有人死就救
-            else:
-                resp = await request_dm_input(witch, prompt, lambda c: c.strip().lower() in ['yes', 'y', 'no', 'n'])
+        if witch:
+            use_antidote = False
+            async with game.lock:
+                can_use_antidote = game.witch_potions['antidote']
+                target_msg = f"今晚 {wolf_kill} 號玩家被殺了。" if wolf_kill else "今晚是平安夜。"
 
-            if resp and resp.strip().lower() in ['yes', 'y'] and wolf_kill:
-                witch_save = True
-                use_antidote = True
-                try: await witch.send("已使用解藥。")
-                except: pass
-            else:
-                try: await witch.send("未使用解藥。")
-                except: pass
-        else:
-             try: await witch.send(f"🔮 **女巫請睜眼。** {target_msg} (解藥已用完)")
-             except: pass
+            # 解藥
+            if can_use_antidote:
+                prompt = f"🔮 **女巫請睜眼。** {target_msg} 要使用解藥嗎？(輸入 yes/no)"
+                if hasattr(witch, 'bot') and witch.bot:
+                    resp = "yes" if wolf_kill else "no" # AI 簡單邏輯：有人死就救
+                else:
+                    resp = await request_dm_input(witch, prompt, lambda c: c.strip().lower() in ['yes', 'y', 'no', 'n'])
 
-        if use_antidote:
-             async with game.lock:
-                game.witch_potions['antidote'] = False
-
-        # 毒藥
-        use_poison = False
-        poison_target_id = None
-        async with game.lock:
-             can_use_poison = game.witch_potions['poison']
-
-        if can_use_poison:
-            resp = await get_action(witch, "女巫", "要使用毒藥嗎？請輸入玩家編號 (輸入 no 不使用):")
-            if resp and resp.strip().lower() != 'no':
-                try:
-                    witch_poison = int(resp)
-                    use_poison = True
-                    poison_target_id = witch_poison
-                    try: await witch.send(f"已對 {witch_poison} 號使用毒藥。")
+                if resp and resp.strip().lower() in ['yes', 'y'] and wolf_kill:
+                    witch_save = True
+                    use_antidote = True
+                    try: await witch.send("已使用解藥。")
                     except: pass
-                except: pass
+                else:
+                    try: await witch.send("未使用解藥。")
+                    except: pass
             else:
-                try: await witch.send("未使用毒藥。")
-                except: pass
+                 try: await witch.send(f"🔮 **女巫請睜眼。** {target_msg} (解藥已用完)")
+                 except: pass
 
-        if use_poison:
-             async with game.lock:
-                game.witch_potions['poison'] = False
+            if use_antidote:
+                 async with game.lock:
+                    game.witch_potions['antidote'] = False
+
+            # 毒藥
+            use_poison = False
+            poison_target_id = None
+            async with game.lock:
+                 can_use_poison = game.witch_potions['poison']
+
+            if can_use_poison:
+                resp = await get_action(witch, "女巫", "要使用毒藥嗎？請輸入玩家編號 (輸入 no 不使用):")
+                if resp and resp.strip().lower() != 'no':
+                    try:
+                        witch_poison = int(resp)
+                        use_poison = True
+                        poison_target_id = witch_poison
+                        try: await witch.send(f"已對 {witch_poison} 號使用毒藥。")
+                        except: pass
+                    except: pass
+                else:
+                    try: await witch.send("未使用毒藥。")
+                    except: pass
+
+            if use_poison:
+                 async with game.lock:
+                    game.witch_potions['poison'] = False
+
+        return witch_save, witch_poison
 
     # 預言家
-    async with game.lock:
-        seer_candidates = game.role_to_players.get("預言家", [])
-        seer = next((p for p in seer_candidates if p in game.players), None)
+    async def run_seer():
+        async with game.lock:
+            seer_candidates = game.role_to_players.get("預言家", [])
+            seer = next((p for p in seer_candidates if p in game.players), None)
 
-    if seer:
-        resp = await get_action(seer, "預言家", "🔮 **預言家請睜眼。** 今晚要查驗誰？請輸入玩家編號:")
-        if resp and resp.strip().lower() != 'no':
-            target_id = int(resp)
-            async with game.lock:
-                target_obj = game.player_ids.get(target_id)
-                target_role = game.roles.get(target_obj, "未知") if target_obj else "未知"
+        if seer:
+            resp = await get_action(seer, "預言家", "🔮 **預言家請睜眼。** 今晚要查驗誰？請輸入玩家編號:")
+            if resp and resp.strip().lower() != 'no':
+                target_id = int(resp)
+                async with game.lock:
+                    target_obj = game.player_ids.get(target_id)
+                    target_role = game.roles.get(target_obj, "未知") if target_obj else "未知"
 
-            is_bad = "狼" in target_role and target_role != "隱狼"
-            result = "狼人 (查殺)" if is_bad else "好人 (金水)"
+                is_bad = "狼" in target_role and target_role != "隱狼"
+                result = "狼人 (查殺)" if is_bad else "好人 (金水)"
 
-            try: await seer.send(f"{target_id} 號的身分是：**{result}**")
-            except: pass
-        else:
-            try: await seer.send("今晚未查驗。")
-            except: pass
+                try: await seer.send(f"{target_id} 號的身分是：**{result}**")
+                except: pass
+            else:
+                try: await seer.send("今晚未查驗。")
+                except: pass
+
+    # 並發執行 (Concurrent Execution)
+    guard_task = asyncio.create_task(run_guard())
+    wolf_task = asyncio.create_task(run_wolf())
+    seer_task = asyncio.create_task(run_seer())
+
+    # 狼人優先完成以供女巫參考
+    wolf_kill = await wolf_task
+
+    # 女巫行動 (依賴狼人結果)
+    witch_task = asyncio.create_task(run_witch(wolf_kill))
+    witch_save, witch_poison = await witch_task
+
+    # 等待其他任務完成
+    guard_protect = await guard_task
+    await seer_task
 
     # 結算
     dead_ids = set()
