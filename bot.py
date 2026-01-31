@@ -737,6 +737,7 @@ async def start(interaction: discord.Interaction):
 
         game.game_active = True
         game.roles = {}
+        game.role_to_players = {}
         game.votes = {}
         game.voted_players = set()
 
