@@ -1,6 +1,7 @@
 import os
 import asyncio
 import discord
+from collections import deque
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -117,7 +118,7 @@ class GameState:
         self.lock = asyncio.Lock() # 並發控制鎖
 
         # 發言階段狀態
-        self.speaking_queue = []
+        self.speaking_queue = deque()
         self.current_speaker = None
         self.speaking_active = False
 
@@ -237,9 +238,7 @@ async def check_game_over(channel, game):
         await announce_event(channel, game, "遊戲結束", f"獲勝者：{winner}。原因：{reason}")
 
         # 公佈身分
-        msg = "**本局玩家身分：**\n"
-        for p, r in game.roles.items():
-            msg += f"{p.name}: {r}\n"
+        msg = "**本局玩家身分：**\n" + "".join([f"{p.name}: {r}\n" for p, r in game.roles.items()])
 
         await channel.send(msg)
 
@@ -527,7 +526,7 @@ async def start_next_turn(channel, game):
             asyncio.create_task(perform_ai_voting(channel, game))
             return
 
-        next_player = game.speaking_queue.pop(0)
+        next_player = game.speaking_queue.popleft()
         game.current_speaker = next_player
         remaining_count = len(game.speaking_queue)
 
@@ -585,8 +584,9 @@ async def perform_day(channel, game, dead_players=[]):
     if not game_over:
         await channel.send("🔊 **進入依序發言階段**，正在隨機排序並設定靜音...")
         async with game.lock:
-            game.speaking_queue = list(game.players)
-            secure_random.shuffle(game.speaking_queue)
+            temp_queue = list(game.players)
+            secure_random.shuffle(temp_queue)
+            game.speaking_queue = deque(temp_queue)
             game.speaking_active = True
             game.current_speaker = None
             game.speech_history = [] # 清空發言紀錄
@@ -801,11 +801,12 @@ async def start(interaction: discord.Interaction):
         game.player_id_map = {}
         game.witch_potions = {'antidote': True, 'poison': True}
 
-        player_list_msg = "**本局玩家列表：**\n"
+        player_list_msg_lines = ["**本局玩家列表：**\n"]
         for idx, player in enumerate(active_players, 1):
             game.player_ids[idx] = player
             game.player_id_map[player] = idx
-            player_list_msg += f"**{idx}.** {player.name}\n"
+            player_list_msg_lines.append(f"**{idx}.** {player.name}\n")
+        player_list_msg = "".join(player_list_msg_lines)
 
     await interaction.channel.send(player_list_msg)
 

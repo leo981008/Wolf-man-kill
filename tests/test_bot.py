@@ -20,6 +20,8 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         ctx.user = MagicMock() # Interaction uses .user
         ctx.user.name = "TestHost"
         ctx.user.send = AsyncMock()
+        
+        # [保留 perf 分支] 這裡的設定比較完整，包含了 author 和 response/followup 的 mock
         ctx.author = ctx.user # Compatibility if needed
 
         ctx.response = MagicMock()
@@ -35,6 +37,9 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         ctx.guild.id = 12345
         ctx.guild_id = 12345 # Interaction has guild_id
         ctx.guild.default_role = MagicMock()
+
+        # Followup mock
+        ctx.followup.send = AsyncMock()
 
         # Mock players
         player1 = MagicMock()
@@ -69,6 +74,7 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         # Check that perform_night was called
         mock_perform_night.assert_called_once()
 
+        # [保留 perf 分支] 這裡有額外的測試，驗證是否有發送角色說明與版權宣告
         # Verify role description sent to player via DM
         player1_msgs = [args[0] for args, _ in player1.send.call_args_list]
         player1_has_desc = any("功能說明" in m for m in player1_msgs)
