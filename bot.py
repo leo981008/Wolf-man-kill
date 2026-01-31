@@ -469,7 +469,8 @@ async def perform_ai_voting(channel, game):
     ai_voters = []
     async with game.lock:
         if not game.game_active or game.speaking_active: return
-        ai_voters = [p for p in game.ai_players if p in game.players and p not in game.voted_players]
+        players_set = set(game.players)
+        ai_voters = [p for p in game.ai_players if p in players_set and p not in game.voted_players]
         all_targets = list(game.player_ids.keys())
 
     if not ai_voters: return

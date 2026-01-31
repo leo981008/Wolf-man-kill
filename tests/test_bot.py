@@ -20,8 +20,13 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         ctx.author = MagicMock()
         ctx.author.name = "TestHost"
         ctx.author.send = AsyncMock()
+        ctx.response = MagicMock()
+        ctx.response.send_message = AsyncMock()
+        ctx.followup = MagicMock()
+        ctx.followup.send = AsyncMock()
         ctx.send = AsyncMock()
         ctx.channel = MagicMock()
+        ctx.channel.send = AsyncMock()
         ctx.channel.set_permissions = AsyncMock()
         ctx.guild = MagicMock()
         ctx.guild.id = 12345
@@ -47,12 +52,12 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         # Actually start command handles adding host to gods if not present.
 
         # Call start
-        await bot.start(ctx)
+        await bot.start.callback(ctx)
 
-        # Verify ctx.send was called
+        # Verify ctx.channel.send was called
         found_role_description = False
         messages = []
-        for call_args in ctx.send.call_args_list:
+        for call_args in ctx.channel.send.call_args_list:
             args, kwargs = call_args
             msg = args[0]
             messages.append(msg)
@@ -79,8 +84,13 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         ctx.author = MagicMock()
         ctx.author.name = "TestHost"
         ctx.author.send = AsyncMock()
+        ctx.response = MagicMock()
+        ctx.response.send_message = AsyncMock()
+        ctx.followup = MagicMock()
+        ctx.followup.send = AsyncMock()
         ctx.send = AsyncMock()
         ctx.channel = MagicMock()
+        ctx.channel.send = AsyncMock()
         ctx.channel.set_permissions = AsyncMock()
         ctx.guild = MagicMock()
         ctx.guild.id = 12345
@@ -103,11 +113,11 @@ class TestBotStart(unittest.IsolatedAsyncioTestCase):
         game.gods = [ctx.author]
 
         # Call start
-        await bot.start(ctx)
+        await bot.start.callback(ctx)
 
         # Check for attribution
         found_attribution = False
-        for call_args in ctx.send.call_args_list:
+        for call_args in ctx.channel.send.call_args_list:
             args, kwargs = call_args
             msg = args[0]
             if "(資料來源: [狼人殺百科](https://lrs.fandom.com/zh/wiki/局式), CC-BY-SA)" in msg:

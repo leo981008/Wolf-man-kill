@@ -9,6 +9,8 @@ def mock_ctx():
     ctx.guild.id = 999
     ctx.send = AsyncMock()
     ctx.channel.set_permissions = AsyncMock()
+    ctx.channel.send = AsyncMock()
+    ctx.channel.guild = ctx.guild
     ctx.guild.default_role = MagicMock()
     return ctx
 
@@ -44,7 +46,7 @@ async def test_win_condition_wolves_win_slaughter_villagers(mock_ctx, reset_bot_
     dead_players = [p2]
 
     # Call perform_day with GAME object
-    await bot.perform_day(mock_ctx, game, dead_players)
+    await bot.perform_day(mock_ctx.channel, game, dead_players)
 
     assert game.game_active is False, "Game should end when all Villagers are dead"
 
@@ -74,7 +76,7 @@ async def test_win_condition_wolves_win_slaughter_gods(mock_ctx, reset_bot_state
     # Simulate Night: Wolf kills Seer (p3)
     dead_players = [p3]
 
-    await bot.perform_day(mock_ctx, game, dead_players)
+    await bot.perform_day(mock_ctx.channel, game, dead_players)
 
     assert game.game_active is False, "Game should end when all Gods are dead"
 
@@ -101,6 +103,6 @@ async def test_win_condition_good_wins(mock_ctx, reset_bot_state):
     game.voted_players = {p1, p2}
 
     # Call resolve_votes with GAME object
-    await bot.resolve_votes(mock_ctx, game)
+    await bot.resolve_votes(mock_ctx.channel, game)
 
     assert game.game_active is False, "Game should end when all Wolves are dead"
