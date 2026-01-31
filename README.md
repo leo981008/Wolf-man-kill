@@ -10,9 +10,9 @@
 - **存取控制**：嚴格的權限驗證，確保只有房主或管理員能執行敏感指令 (如 `/reset`, `/die`)。
 - **輸入驗證**：針對所有使用者輸入進行長度與型別檢查，防止惡意 Payload 攻擊。
 
-## 新增功能：Gemini AI 整合 (New Features)
+## AI 整合功能 (AI Features)
 
-本版本整合了 Google Gemini API，帶來以下智慧功能：
+本版本支援多種 AI 模型（Google Gemini 與 Ollama），帶來以下智慧功能：
 
 1.  **動態板子生成**：
     - 當玩家人數不在標準模板 (6, 9, 10, 12人等) 範圍內時（例如 11 人或 14 人），Bot 會自動呼叫 AI，根據現有人數與角色庫生成平衡的板子。
@@ -27,6 +27,24 @@
     - 支援加入 AI 電腦玩家填補空缺 (透過 `/addbot`)。
     - **全自動夜間行動**：AI 狼人（殺人）、預言家（查驗）、女巫（救/毒）、守衛（守護）會根據簡易邏輯自動執行。
     - **白天發言與投票**：AI 會在白天發言階段生成符合情境的對話，並參與投票。
+    - **上下文感知發言**：AI 在發言時會參考本輪其他玩家的發言紀錄，讓對話更加自然且具邏輯性。
+
+## AI 配置說明
+
+Bot 支援切換 AI 提供者，您可以選擇使用雲端的 **Google Gemini** 或本地的 **Ollama**。
+
+### 環境變數設定
+
+請在 `.env` 檔案中設定以下變數：
+
+| 變數名稱 | 說明 | 預設值 | 範例 |
+| :--- | :--- | :--- | :--- |
+| `AI_PROVIDER` | 選擇 AI 提供者 (`gemini` 或 `ollama`) | `gemini` | `ollama` |
+| `GEMINI_API_KEY` | Google Gemini 的 API Key (若使用 Gemini 必填) | 無 | `AIzaSy...` |
+| `OLLAMA_MODEL` | Ollama 使用的模型名稱 | `gpt-oss:20b` | `llama3` |
+| `OLLAMA_HOST` | Ollama API 的連線位址 | `http://localhost:11434` | `http://192.168.1.10:11434` |
+
+若要使用 Ollama，請確保您的機器上已安裝並執行 Ollama 服務，且已下載指定的模型（預設為 `gpt-oss:20b`）。
 
 ## 功能列表
 
@@ -94,7 +112,7 @@ source venv/bin/activate
 ```
 
 ### 4. 安裝套件
-安裝包含 `google-generativeai` 在內的相依套件：
+安裝相依套件：
 
 ```bash
 pip install -r requirements.txt
@@ -110,7 +128,11 @@ nano .env
 修改內容範例：
 ```
 DISCORD_TOKEN=你的_Discord_Bot_Token
+AI_PROVIDER=gemini  # 或 ollama
 GEMINI_API_KEY=你的_Google_Gemini_API_Key
+# 若使用 Ollama，請設定以下變數
+# OLLAMA_MODEL=gpt-oss:20b
+# OLLAMA_HOST=http://localhost:11434
 ```
 *(Gemini API Key 可至 Google AI Studio 免費申請)*
 
@@ -130,9 +152,9 @@ python bot.py
 
 ## 檔案結構
 - `bot.py`: 主程式 (Slash Commands + AI 整合)。
-- `ai_manager.py`: 負責與 Gemini API 溝通的模組。
+- `ai_manager.py`: 負責與 AI (Gemini/Ollama) 溝通的模組。
 - `.env`: 設定檔。
-- `requirements.txt`: 套件清單 (含 google-generativeai)。
+- `requirements.txt`: 套件清單。
 - `tests/`: 測試代碼目錄。
 
 ## 資料來源與授權
