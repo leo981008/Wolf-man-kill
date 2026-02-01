@@ -62,6 +62,8 @@ class AIManager:
         if self.provider == 'ollama':
             print(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
 
+        self.narrative_cache = {}
+
     async def get_session(self):
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
@@ -142,6 +144,14 @@ class AIManager:
         """
         Generates flavor text for game events.
         """
+        # Ensure context is hashable and limit cache size
+        cache_key = (event_type, str(context), language)
+        if cache_key in self.narrative_cache:
+            return self.narrative_cache[cache_key]
+
+        if len(self.narrative_cache) >= 100:
+            self.narrative_cache.clear()
+
         prompt = f"""
         你是一個狼人殺遊戲的主持人（上帝）。
         請根據以下情境，生成一段富有氛圍的旁白（約 30-50 字）。
@@ -150,7 +160,9 @@ class AIManager:
         事件類型：{event_type}
         詳細資訊：{context}
         """
-        return await self.generate_response(prompt)
+        response = await self.generate_response(prompt)
+        self.narrative_cache[cache_key] = response
+        return response
 
     async def get_ai_action(self, role, game_context, valid_targets):
         """
