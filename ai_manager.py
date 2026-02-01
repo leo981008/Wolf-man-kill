@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 import aiohttp
+from collections import OrderedDict
 
 load_dotenv()
 
@@ -62,7 +63,7 @@ class AIManager:
         if self.provider == 'ollama':
             print(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
 
-        self.narrative_cache = {}
+        self.narrative_cache = OrderedDict()
 
     async def get_session(self):
         if self.session is None or self.session.closed:
@@ -147,10 +148,9 @@ class AIManager:
         # Ensure context is hashable and limit cache size
         cache_key = (event_type, str(context), language)
         if cache_key in self.narrative_cache:
+            # Move to end to mark as recently used
+            self.narrative_cache.move_to_end(cache_key)
             return self.narrative_cache[cache_key]
-
-        if len(self.narrative_cache) >= 100:
-            self.narrative_cache.clear()
 
         prompt = f"""
         你是一個狼人殺遊戲的主持人（上帝）。
@@ -161,7 +161,13 @@ class AIManager:
         詳細資訊：{context}
         """
         response = await self.generate_response(prompt)
+
         self.narrative_cache[cache_key] = response
+
+        # Evict oldest if over limit
+        if len(self.narrative_cache) > 100:
+            self.narrative_cache.popitem(last=False)
+
         return response
 
     async def get_ai_action(self, role, game_context, valid_targets):

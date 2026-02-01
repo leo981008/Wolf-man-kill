@@ -100,8 +100,18 @@ async def test_generate_narrative_cache_eviction_and_hashable():
 
         assert len(test_ai.narrative_cache) == 100
 
-        # Next call should trigger clear (len >= 100)
+        # Next call should trigger eviction (len >= 100)
         await test_ai.generate_narrative("Overflow", "Context")
 
-        # Should have cleared and added the new one
-        assert len(test_ai.narrative_cache) == 1
+        # Should maintain 100 items (evicted one, added one)
+        assert len(test_ai.narrative_cache) == 100
+
+        # Verify oldest item was evicted
+        # The first item added was ("Type", str({"key": "value"}), "zh-TW")
+        # Since we use OrderedDict, it should be gone.
+        oldest_key = ("Type", str({"key": "value"}), "zh-TW")
+        assert oldest_key not in test_ai.narrative_cache
+
+        # Verify a newer item is still there
+        newer_key = ("Type0", "Context", "zh-TW")
+        assert newer_key in test_ai.narrative_cache
