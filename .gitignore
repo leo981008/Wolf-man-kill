@@ -3,3 +3,5 @@ __pycache__/
 .env
 venv/
 .DS_Store
+ai_cache.json
+test_ai_cache.json
