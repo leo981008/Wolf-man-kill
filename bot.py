@@ -503,7 +503,7 @@ async def perform_ai_voting(channel, game):
 
     if not ai_voters: return
 
-    for ai_player in ai_voters:
+    async def process_ai_voter(ai_player):
         await asyncio.sleep(random.uniform(1, 3))
 
         target_id = await ai_manager.get_ai_action("平民", "白天投票階段", all_targets)
@@ -515,7 +515,7 @@ async def perform_ai_voting(channel, game):
 
         should_resolve = False
         async with game.lock:
-            if ai_player in game.voted_players: continue
+            if ai_player in game.voted_players: return
 
             if is_abstain:
                 game.voted_players.add(ai_player)
@@ -536,6 +536,13 @@ async def perform_ai_voting(channel, game):
 
         if should_resolve:
             await resolve_votes(channel, game)
+
+    tasks = [process_ai_voter(p) for p in ai_voters]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in results:
+        if isinstance(res, Exception):
+            print(f"Error in AI voting task: {res}")
 
 async def start_next_turn(channel, game):
     next_player = None
