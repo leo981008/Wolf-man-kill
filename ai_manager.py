@@ -119,7 +119,8 @@ class AIManager:
             roles = json.loads(clean_text)
             if isinstance(roles, list) and len(roles) == player_count:
                 # Validate roles exist
-                if all(r in existing_roles for r in roles):
+                existing_roles_set = set(existing_roles)
+                if all(r in existing_roles_set for r in roles):
                     return roles
             print(f"Invalid generated roles: {roles}")
             return []
