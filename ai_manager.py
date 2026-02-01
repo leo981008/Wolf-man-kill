@@ -40,6 +40,8 @@ SAFETY_SETTINGS = [
     },
 ]
 
+DIGIT_PATTERN = re.compile(r'\d+')
+
 class AIManager:
     def __init__(self):
         self.provider = os.getenv('AI_PROVIDER', 'gemini').lower()
@@ -159,7 +161,7 @@ class AIManager:
         if "no" in clean:
             return "no"
 
-        match = re.search(r'\d+', clean)
+        match = DIGIT_PATTERN.search(clean)
         if match:
             return match.group()
         return "no"
