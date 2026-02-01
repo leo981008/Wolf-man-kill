@@ -1,4 +1,5 @@
 import pytest
+import os
 from unittest.mock import MagicMock, patch, AsyncMock
 from ai_manager import AIManager, ai_manager
 
@@ -118,32 +119,40 @@ async def test_generate_narrative_cache_eviction_and_hashable():
 
 @pytest.mark.asyncio
 async def test_generate_role_template_caching():
-    test_ai = AIManager()
+    # Use a separate cache file for testing to avoid interference
+    with patch('ai_manager.CACHE_FILE', 'test_ai_cache.json'):
+        if os.path.exists('test_ai_cache.json'):
+            os.remove('test_ai_cache.json')
 
-    with patch.object(test_ai, 'generate_response', new_callable=AsyncMock) as mock_gen:
-        mock_gen.return_value = '["狼人", "預言家", "平民"]'
+        test_ai = AIManager()
 
-        roles = ["狼人", "預言家", "平民"]
+        with patch.object(test_ai, 'generate_response', new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = '["狼人", "預言家", "平民"]'
 
-        # First call
-        res1 = await test_ai.generate_role_template(3, roles)
-        assert res1 == roles
-        assert mock_gen.call_count == 1
+            roles = ["狼人", "預言家", "平民"]
 
-        # Second call (same roles, same count)
-        res2 = await test_ai.generate_role_template(3, roles)
-        assert res2 == roles
-        assert mock_gen.call_count == 1
+            # First call
+            res1 = await test_ai.generate_role_template(3, roles)
+            assert res1 == roles
+            assert mock_gen.call_count == 1
 
-        # Third call (different roles order) - should still hit cache because we sort them
-        res3 = await test_ai.generate_role_template(3, reversed(roles))
-        assert res3 == roles
-        assert mock_gen.call_count == 1
+            # Second call (same roles, same count)
+            res2 = await test_ai.generate_role_template(3, roles)
+            assert res2 == roles
+            assert mock_gen.call_count == 1
 
-        # Fourth call (different count)
-        mock_gen.return_value = '["狼人", "平民"]'
-        res4 = await test_ai.generate_role_template(2, roles) # roles passed here doesn't matter much for mock response validation if we don't strict check existing
-        # But wait, logic checks if roles exist in existing_roles.
-        # roles list has ["狼人", "預言家", "平民"]. generated has ["狼人", "平民"]. Both exist.
-        assert res4 == ["狼人", "平民"]
-        assert mock_gen.call_count == 2
+            # Third call (different roles order) - should still hit cache because we sort them
+            res3 = await test_ai.generate_role_template(3, reversed(roles))
+            assert res3 == roles
+            assert mock_gen.call_count == 1
+
+            # Fourth call (different count)
+            mock_gen.return_value = '["狼人", "平民"]'
+            res4 = await test_ai.generate_role_template(2, roles) # roles passed here doesn't matter much for mock response validation if we don't strict check existing
+            # But wait, logic checks if roles exist in existing_roles.
+            # roles list has ["狼人", "預言家", "平民"]. generated has ["狼人", "平民"]. Both exist.
+            assert res4 == ["狼人", "平民"]
+            assert mock_gen.call_count == 2
+
+        if os.path.exists('test_ai_cache.json'):
+            os.remove('test_ai_cache.json')

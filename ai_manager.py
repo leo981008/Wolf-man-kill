@@ -43,6 +43,8 @@ SAFETY_SETTINGS = [
 
 DIGIT_PATTERN = re.compile(r'\d+')
 
+CACHE_FILE = "ai_cache.json"
+
 class AIManager:
     def __init__(self):
         self.provider = os.getenv('AI_PROVIDER', 'gemini').lower()
@@ -65,6 +67,46 @@ class AIManager:
 
         self.narrative_cache = OrderedDict()
         self.role_template_cache = OrderedDict()
+        self._load_cache()
+
+    def _load_cache(self):
+        if not os.path.exists(CACHE_FILE):
+            return
+
+        try:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            for entry in data:
+                # Entry format: {"player_count": 5, "existing_roles": [...], "roles": [...]}
+                if not all(k in entry for k in ("player_count", "existing_roles", "roles")):
+                    continue
+
+                player_count = entry["player_count"]
+                existing_roles = tuple(entry["existing_roles"])
+                roles = entry["roles"]
+
+                key = (player_count, existing_roles)
+                self.role_template_cache[key] = roles
+
+            print(f"Loaded {len(self.role_template_cache)} entries from cache.")
+        except Exception as e:
+            print(f"Failed to load cache: {e}")
+
+    def _save_cache(self):
+        try:
+            data = []
+            for (player_count, existing_roles), roles in self.role_template_cache.items():
+                data.append({
+                    "player_count": player_count,
+                    "existing_roles": list(existing_roles),
+                    "roles": roles
+                })
+
+            with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Failed to save cache: {e}")
 
     async def get_session(self):
         if self.session is None or self.session.closed:
@@ -146,6 +188,7 @@ class AIManager:
                     self.role_template_cache[cache_key] = roles
                     if len(self.role_template_cache) > 100:
                         self.role_template_cache.popitem(last=False)
+                    self._save_cache()
                     return roles
             print(f"Invalid generated roles: {roles}")
             return []
