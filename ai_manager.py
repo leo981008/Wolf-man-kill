@@ -47,6 +47,7 @@ class AIManager:
         self.provider = os.getenv('AI_PROVIDER', 'gemini').lower()
         self.ollama_model = os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
         self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+        self.session = None
 
         self.model = None
         if self.provider == 'gemini':
@@ -61,6 +62,15 @@ class AIManager:
         if self.provider == 'ollama':
             print(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
 
+    async def get_session(self):
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+
+    async def close(self):
+        if self.session and not self.session.closed:
+            await self.session.close()
+
     async def _generate_with_ollama(self, prompt):
         url = f"{self.ollama_host}/api/generate"
         payload = {
@@ -69,15 +79,15 @@ class AIManager:
             "stream": False
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data.get("response", "").strip()
-                    else:
-                        error_text = await response.text()
-                        print(f"Ollama API Error: {response.status} - {error_text}")
-                        return ""
+            session = await self.get_session()
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("response", "").strip()
+                else:
+                    error_text = await response.text()
+                    print(f"Ollama API Error: {response.status} - {error_text}")
+                    return ""
         except Exception as e:
             print(f"Ollama Connection Error: {e}")
             return ""

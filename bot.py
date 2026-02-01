@@ -78,6 +78,10 @@ class WerewolfBot(commands.Bot):
         await self.tree.sync()
         print("Slash commands synced globally.")
 
+    async def close(self):
+        await ai_manager.close()
+        await super().close()
+
 bot = WerewolfBot()
 
 class AIPlayer:
