@@ -64,6 +64,7 @@ class AIManager:
             print(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
 
         self.narrative_cache = OrderedDict()
+        self.role_template_cache = OrderedDict()
 
     async def get_session(self):
         if self.session is None or self.session.closed:
@@ -118,6 +119,13 @@ class AIManager:
         """
         Generates a balanced role list for a given player count.
         """
+        # Create cache key
+        cache_key = (player_count, tuple(sorted(existing_roles)))
+
+        if cache_key in self.role_template_cache:
+            self.role_template_cache.move_to_end(cache_key)
+            return self.role_template_cache[cache_key]
+
         prompt = f"""
         請為 {player_count} 名玩家設計一個平衡的狼人殺配置。
         只能使用以下角色：{', '.join(existing_roles)}。
@@ -134,6 +142,10 @@ class AIManager:
                 # Validate roles exist
                 existing_roles_set = set(existing_roles)
                 if all(r in existing_roles_set for r in roles):
+                    # Cache the result
+                    self.role_template_cache[cache_key] = roles
+                    if len(self.role_template_cache) > 100:
+                        self.role_template_cache.popitem(last=False)
                     return roles
             print(f"Invalid generated roles: {roles}")
             return []
