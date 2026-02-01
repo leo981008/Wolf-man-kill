@@ -54,3 +54,54 @@ async def test_get_ai_action_abstain():
 
         action = await ai_manager.get_ai_action("平民", "Vote", [1, 2, 3])
         assert action == "no"
+
+@pytest.mark.asyncio
+async def test_generate_narrative_caching():
+    test_ai = AIManager()
+
+    # Mock generate_response using AsyncMock since it's an async method
+    with patch.object(test_ai, 'generate_response', new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = "Cached Narrative"
+
+        # First call
+        res1 = await test_ai.generate_narrative("Type1", "Context1")
+        assert res1 == "Cached Narrative"
+        assert mock_gen.call_count == 1
+
+        # Second call (should be cached)
+        res2 = await test_ai.generate_narrative("Type1", "Context1")
+        assert res2 == "Cached Narrative"
+        assert mock_gen.call_count == 1
+
+        # Different input (should call again)
+        mock_gen.return_value = "New Narrative"
+        res3 = await test_ai.generate_narrative("Type2", "Context2")
+        assert res3 == "New Narrative"
+        assert mock_gen.call_count == 2
+
+@pytest.mark.asyncio
+async def test_generate_narrative_cache_eviction_and_hashable():
+    test_ai = AIManager()
+
+    with patch.object(test_ai, 'generate_response', new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = "Narrative"
+
+        # Test unhashable context (dict)
+        res1 = await test_ai.generate_narrative("Type", {"key": "value"})
+        res2 = await test_ai.generate_narrative("Type", {"key": "value"})
+        assert res1 == res2
+        assert mock_gen.call_count == 1
+
+        # Test eviction logic
+        # We already have 1 item in cache.
+        # Add 99 items to reach 100.
+        for i in range(99):
+             await test_ai.generate_narrative(f"Type{i}", "Context")
+
+        assert len(test_ai.narrative_cache) == 100
+
+        # Next call should trigger clear (len >= 100)
+        await test_ai.generate_narrative("Overflow", "Context")
+
+        # Should have cleared and added the new one
+        assert len(test_ai.narrative_cache) == 1
