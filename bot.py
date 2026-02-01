@@ -475,6 +475,7 @@ async def perform_night(channel, game):
 
 async def set_player_mute(member, mute=True):
     if not member.voice: return
+    if member.voice.mute == mute: return
     try: await member.edit(mute=mute)
     except: pass
 
