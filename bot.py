@@ -277,7 +277,11 @@ async def request_dm_input(player, prompt, valid_check, timeout=45):
 async def perform_night(channel, game):
     """執行天黑邏輯"""
     try:
-        await channel.set_permissions(channel.guild.default_role, send_messages=False)
+        # Check current permissions before making API call
+        perms = channel.permissions_for(channel.guild.default_role)
+        if perms.send_messages:
+            await channel.set_permissions(channel.guild.default_role, send_messages=False)
+
         await announce_event(channel, game, "天黑", "夜晚行動開始，請留意私訊。")
     except discord.Forbidden:
         await channel.send("警告：Bot 權限不足 (Manage Channels)，無法執行天黑禁言。")
