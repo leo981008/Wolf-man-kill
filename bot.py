@@ -482,7 +482,7 @@ async def perform_night(channel, game):
     await perform_day(channel, game, dead_players_list)
 
 async def set_player_mute(member, mute=True):
-    if not member.voice: return
+    if not hasattr(member, 'voice') or not member.voice: return
     if member.voice.mute == mute: return
     try: await member.edit(mute=mute)
     except: pass
