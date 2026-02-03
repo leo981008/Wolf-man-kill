@@ -6,6 +6,7 @@ import json
 import re
 import aiohttp
 from collections import OrderedDict
+from ai_strategies import ROLE_STRATEGIES
 
 load_dotenv()
 
@@ -229,10 +230,16 @@ class AIManager:
         """
         Decides an action for an AI player.
         """
+        strategy_info = ROLE_STRATEGIES.get(role, {})
+        action_guide = strategy_info.get("action_guide", "")
+
         prompt = f"""
         你正在玩狼人殺。你的身分是：{role}。
         當前局勢：{game_context}
         你可以選擇的目標（玩家編號）有：{valid_targets}。
+
+        策略建議：{action_guide}
+
         請根據你的角色勝利條件做出最佳選擇。
 
         請只回傳你選擇的目標編號（數字）。
@@ -259,10 +266,20 @@ class AIManager:
         if speech_history:
             history_text = "\n本輪發言紀錄：\n" + "\n".join(speech_history)
 
+        strategy_info = ROLE_STRATEGIES.get(role, {})
+        speech_style = strategy_info.get("speech_style", "自然")
+        objective = strategy_info.get("objective", "獲得勝利")
+        speech_guide = strategy_info.get("speech_guide", "")
+
         prompt = f"""
         你正在玩狼人殺。你是 {player_id} 號玩家。
         你的真實身分是：{role}。
-        (如果是狼人，請偽裝成好人；如果是好人，請尋找狼人)。
+
+        你的發言風格應該是：{speech_style}。
+        你的主要目標是：{objective}。
+
+        詳細指導原則：
+        {speech_guide}
 
         當前局勢：{game_context}
         {history_text}
