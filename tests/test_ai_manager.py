@@ -1,60 +1,87 @@
 import pytest
 import os
+import asyncio
+import json
 from unittest.mock import MagicMock, patch, AsyncMock
 from ai_manager import AIManager, ai_manager
 
 @pytest.mark.asyncio
-async def test_generate_role_template():
-    # Mocking the model
-    with patch('ai_manager.genai.GenerativeModel') as mock_model_cls:
-        mock_model = MagicMock()
-        mock_model_cls.return_value = mock_model
+async def test_generate_role_template_gemini():
+    # Clear cache to ensure call is made
+    ai_manager.role_template_cache.clear()
 
-        # Manually set the model on our instance
-        ai_manager.model = mock_model
+    # Mocking _generate_with_gemini directly to simplify test of higher level logic
+    with patch.object(ai_manager, '_generate_with_gemini', new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = '["狼人", "預言家", "平民"]'
 
-        # Mock generate_content response
-        mock_response = MagicMock()
-        mock_response.parts = [1]
-        mock_response.text = '["狼人", "預言家", "平民"]'
-
-        mock_model.generate_content.return_value = mock_response
+        # Ensure provider is gemini
+        ai_manager.provider = 'gemini'
 
         roles = await ai_manager.generate_role_template(3, ["狼人", "預言家", "平民"])
 
         assert roles == ["狼人", "預言家", "平民"]
+        mock_gen.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_get_ai_action_vote():
-    with patch('ai_manager.genai.GenerativeModel') as mock_model_cls:
-        mock_model = MagicMock()
-        mock_model_cls.return_value = mock_model
-        ai_manager.model = mock_model
-
-        mock_response = MagicMock()
-        mock_response.parts = [1]
-        mock_response.text = '3' # Vote for player 3
-
-        mock_model.generate_content.return_value = mock_response
+async def test_get_ai_action_vote_gemini():
+    with patch.object(ai_manager, '_generate_with_gemini', new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = '3' # Vote for player 3
+        ai_manager.provider = 'gemini'
 
         action = await ai_manager.get_ai_action("平民", "Vote", [1, 2, 3])
         assert action == "3"
 
 @pytest.mark.asyncio
-async def test_get_ai_action_abstain():
-    with patch('ai_manager.genai.GenerativeModel') as mock_model_cls:
-        mock_model = MagicMock()
-        mock_model_cls.return_value = mock_model
-        ai_manager.model = mock_model
-
-        mock_response = MagicMock()
-        mock_response.parts = [1]
-        mock_response.text = 'no'
-
-        mock_model.generate_content.return_value = mock_response
+async def test_get_ai_action_abstain_gemini():
+    with patch.object(ai_manager, '_generate_with_gemini', new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = 'no'
+        ai_manager.provider = 'gemini'
 
         action = await ai_manager.get_ai_action("平民", "Vote", [1, 2, 3])
         assert action == "no"
+
+@pytest.mark.asyncio
+async def test_generate_with_gemini_subprocess():
+    """Test the actual subprocess call logic"""
+    test_ai = AIManager()
+    test_ai.provider = 'gemini'
+
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        # Create a mock process
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (b'Mocked Response\n', b'')
+        mock_process.returncode = 0
+
+        mock_exec.return_value = mock_process
+
+        response = await test_ai.generate_response("Test Prompt")
+
+        assert response == "Mocked Response"
+
+        # Verify call arguments
+        mock_exec.assert_called_once_with(
+            'gemini', '-p', 'Test Prompt',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+@pytest.mark.asyncio
+async def test_generate_with_gemini_subprocess_error():
+    """Test subprocess error handling"""
+    test_ai = AIManager()
+    test_ai.provider = 'gemini'
+
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        # Create a mock process
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (b'', b'Error occurred')
+        mock_process.returncode = 1
+
+        mock_exec.return_value = mock_process
+
+        response = await test_ai.generate_response("Test Prompt")
+
+        assert response == ""
 
 @pytest.mark.asyncio
 async def test_generate_narrative_caching():
@@ -148,9 +175,7 @@ async def test_generate_role_template_caching():
 
             # Fourth call (different count)
             mock_gen.return_value = '["狼人", "平民"]'
-            res4 = await test_ai.generate_role_template(2, roles) # roles passed here doesn't matter much for mock response validation if we don't strict check existing
-            # But wait, logic checks if roles exist in existing_roles.
-            # roles list has ["狼人", "預言家", "平民"]. generated has ["狼人", "平民"]. Both exist.
+            res4 = await test_ai.generate_role_template(2, roles)
             assert res4 == ["狼人", "平民"]
             assert mock_gen.call_count == 2
 

@@ -1,5 +1,4 @@
 import os
-import google.generativeai as genai
 from dotenv import load_dotenv
 import asyncio
 import json
@@ -9,38 +8,6 @@ from collections import OrderedDict
 from ai_strategies import ROLE_STRATEGIES
 
 load_dotenv()
-
-# Configure Gemini
-api_key = os.getenv('GEMINI_API_KEY')
-if api_key:
-    genai.configure(api_key=api_key)
-
-# Model configuration
-GENERATION_CONFIG = {
-    "temperature": 1.0,
-    "top_p": 0.95,
-    "top_k": 40,
-    "max_output_tokens": 1024,
-}
-
-SAFETY_SETTINGS = [
-    {
-        "category": "HARM_CATEGORY_HARASSMENT",
-        "threshold": "BLOCK_ONLY_HIGH"
-    },
-    {
-        "category": "HARM_CATEGORY_HATE_SPEECH",
-        "threshold": "BLOCK_ONLY_HIGH"
-    },
-    {
-        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        "threshold": "BLOCK_ONLY_HIGH"
-    },
-    {
-        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-        "threshold": "BLOCK_ONLY_HIGH"
-    },
-]
 
 DIGIT_PATTERN = re.compile(r'\d+')
 
@@ -52,15 +19,6 @@ class AIManager:
         self.ollama_model = os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
         self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
         self.session = None
-
-        self.model = None
-        if self.provider == 'gemini':
-            if api_key:
-                self.model = genai.GenerativeModel(model_name="gemini-1.5-flash",
-                                                  generation_config=GENERATION_CONFIG,
-                                                  safety_settings=SAFETY_SETTINGS)
-            else:
-                 print("Warning: GEMINI_API_KEY not found. AI features disabled for Gemini.")
 
         print(f"AI Manager initialized. Provider: {self.provider}")
         if self.provider == 'ollama':
@@ -139,24 +97,36 @@ class AIManager:
             print(f"Ollama Connection Error: {e}")
             return ""
 
+    async def _generate_with_gemini(self, prompt):
+        """Executes gemini-cli via subprocess."""
+        try:
+            # Create subprocess: gemini -p "prompt"
+            # Using list of arguments avoids shell injection risks
+            process = await asyncio.create_subprocess_exec(
+                'gemini', '-p', prompt,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                return stdout.decode().strip()
+            else:
+                error_msg = stderr.decode().strip()
+                print(f"Gemini CLI Error: {error_msg}")
+                return ""
+        except Exception as e:
+            print(f"Gemini Execution Error: {e}")
+            return ""
+
     async def generate_response(self, prompt):
         """Generic async wrapper for generating content"""
         if self.provider == 'ollama':
             return await self._generate_with_ollama(prompt)
 
-        # Default to Gemini
-        if not self.model:
-            return "錯誤：Gemini API Key 未設定，無法生成內容。"
-
-        try:
-            # Run blocking API call in executor
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
-            if response.parts:
-                return response.text.strip()
-            return ""
-        except Exception as e:
-            print(f"Gemini API Error: {e}")
-            return "" # Fail silently or handle gracefully
+        # Default to Gemini (via CLI)
+        return await self._generate_with_gemini(prompt)
 
     async def generate_role_template(self, player_count, existing_roles):
         """
