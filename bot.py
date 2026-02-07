@@ -173,10 +173,17 @@ async def on_message(message):
     # 檢查是否為遊戲發言
     if message.guild:
         game = get_game(message.guild.id)
-        if game.game_active and game.speaking_active:
-            if game.current_speaker == message.author:
+        if game.game_active:
+            # 輪流發言階段
+            if game.speaking_active:
+                if game.current_speaker == message.author:
+                     async with game.lock:
+                         # 紀錄玩家發言
+                         msg_content = f"{message.author.name}: {message.content}"
+                         game.speech_history.append(msg_content)
+            # 自由討論階段 (例如投票前)
+            elif message.author in game.players:
                  async with game.lock:
-                     # 紀錄玩家發言
                      msg_content = f"{message.author.name}: {message.content}"
                      game.speech_history.append(msg_content)
 
@@ -301,7 +308,10 @@ async def perform_night(channel, game):
     # 輔助：獲取行動
     async def get_action(player, role, prompt, targets=None):
         if hasattr(player, 'bot') and player.bot:
-            return await ai_manager.get_ai_action(role, "夜晚行動", targets if targets else all_player_ids)
+            current_history = []
+            async with game.lock:
+                current_history = list(game.speech_history)
+            return await ai_manager.get_ai_action(role, "夜晚行動", targets if targets else all_player_ids, speech_history=current_history)
         return await request_dm_input(player, prompt, is_valid_id)
 
     # 守衛
@@ -515,7 +525,13 @@ async def perform_ai_voting(channel, game):
     async def process_ai_voter(ai_player):
         await asyncio.sleep(random.uniform(1, 3))
 
-        target_id = await ai_manager.get_ai_action("平民", "白天投票階段", all_targets)
+        role = "平民"
+        current_history = []
+        async with game.lock:
+            role = game.roles.get(ai_player, "平民")
+            current_history = list(game.speech_history)
+
+        target_id = await ai_manager.get_ai_action(role, "白天投票階段", all_targets, speech_history=current_history)
 
         target_member = None
         is_abstain = (str(target_id).strip().lower() == "no")

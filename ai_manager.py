@@ -196,17 +196,22 @@ class AIManager:
 
         return response
 
-    async def get_ai_action(self, role, game_context, valid_targets):
+    async def get_ai_action(self, role, game_context, valid_targets, speech_history=None):
         """
         Decides an action for an AI player.
         """
         strategy_info = ROLE_STRATEGIES.get(role, {})
         action_guide = strategy_info.get("action_guide", "")
 
+        history_text = ""
+        if speech_history:
+            history_text = "\n本輪發言/討論紀錄：\n" + "\n".join(speech_history)
+
         prompt = f"""
         你正在玩狼人殺。你的身分是：{role}。
         當前局勢：{game_context}
         你可以選擇的目標（玩家編號）有：{valid_targets}。
+        {history_text}
 
         策略建議：{action_guide}
 
