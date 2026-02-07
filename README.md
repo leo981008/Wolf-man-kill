@@ -31,7 +31,21 @@
 
 ## AI 配置說明
 
-Bot 支援切換 AI 提供者，您可以選擇使用雲端的 **Google Gemini** 或本地的 **Ollama**。
+Bot 支援切換 AI 提供者，您可以選擇使用雲端的 **Google Gemini (CLI)** 或本地的 **Ollama**。
+
+### 安裝 Gemini CLI
+
+若使用 Gemini 作為提供者，需先安裝 `gemini-cli` 並完成登入：
+
+```bash
+# 安裝 Gemini CLI
+npm install -g @google/gemini-cli
+
+# 登入 Google 帳號 (推薦使用此方式以利用免費額度)
+gemini login
+```
+
+若無法使用瀏覽器登入，也可在 `.env` 中設定 `GEMINI_API_KEY`。
 
 ### 環境變數設定
 
@@ -40,7 +54,7 @@ Bot 支援切換 AI 提供者，您可以選擇使用雲端的 **Google Gemini**
 | 變數名稱 | 說明 | 預設值 | 範例 |
 | :--- | :--- | :--- | :--- |
 | `AI_PROVIDER` | 選擇 AI 提供者 (`gemini` 或 `ollama`) | `gemini` | `ollama` |
-| `GEMINI_API_KEY` | Google Gemini 的 API Key (若使用 Gemini 必填) | 無 | `AIzaSy...` |
+| `GEMINI_API_KEY` | Google Gemini 的 API Key (選填，若已透過 CLI 登入則免填) | 無 | `AIzaSy...` |
 | `OLLAMA_MODEL` | Ollama 使用的模型名稱 | `gpt-oss:20b` | `llama3` |
 | `OLLAMA_HOST` | Ollama API 的連線位址 | `http://localhost:11434` | `http://192.168.1.10:11434` |
 
