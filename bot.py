@@ -663,10 +663,14 @@ async def resolve_votes(channel, game):
 
     if len(candidates) > 1:
         names = ", ".join([p.name for p in candidates])
-        await channel.send(f"平票！({names}) 均為 {max_votes} 票。請重新投票。")
+        msg = f"平票！({names}) 均為 {max_votes} 票。請重新投票。"
+        await channel.send(msg)
         async with game.lock:
+            game.speech_history.append(f"系統: {msg}")
             game.votes = {}
             game.voted_players = set()
+
+        asyncio.create_task(perform_ai_voting(channel, game))
     else:
         victim = candidates[0]
         await channel.send(f"投票結束！**{victim.name}** 以 {max_votes} 票被處決。")
