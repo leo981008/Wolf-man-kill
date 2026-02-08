@@ -304,14 +304,13 @@ async def perform_night(channel, game):
 
     # 統一獲取目標 ID 列表
     all_player_ids = list(game.player_ids.keys())
+    async with game.lock:
+        shared_history = list(game.speech_history)
 
     # 輔助：獲取行動
     async def get_action(player, role, prompt, targets=None):
         if hasattr(player, 'bot') and player.bot:
-            current_history = []
-            async with game.lock:
-                current_history = list(game.speech_history)
-            return await ai_manager.get_ai_action(role, "夜晚行動", targets if targets else all_player_ids, speech_history=current_history)
+            return await ai_manager.get_ai_action(role, "夜晚行動", targets if targets else all_player_ids, speech_history=shared_history)
         return await request_dm_input(player, prompt, is_valid_id)
 
     # 守衛
@@ -515,23 +514,22 @@ async def perform_ai_voting(channel, game):
     await asyncio.sleep(5)
 
     ai_voters = []
+    shared_history = []
+    ai_roles = {}
     async with game.lock:
         if not game.game_active or game.speaking_active: return
         ai_voters = [p for p in game.ai_players if p in game.players and p not in game.voted_players]
         all_targets = list(game.player_ids.keys())
+        shared_history = list(game.speech_history)
+        ai_roles = {p: game.roles.get(p, "平民") for p in ai_voters}
 
     if not ai_voters: return
 
     async def process_ai_voter(ai_player):
         await asyncio.sleep(random.uniform(1, 3))
 
-        role = "平民"
-        current_history = []
-        async with game.lock:
-            role = game.roles.get(ai_player, "平民")
-            current_history = list(game.speech_history)
-
-        target_id = await ai_manager.get_ai_action(role, "白天投票階段", all_targets, speech_history=current_history)
+        role = ai_roles.get(ai_player, "平民")
+        target_id = await ai_manager.get_ai_action(role, "白天投票階段", all_targets, speech_history=shared_history)
 
         target_member = None
         is_abstain = (str(target_id).strip().lower() == "no")
