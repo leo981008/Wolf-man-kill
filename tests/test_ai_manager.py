@@ -10,8 +10,8 @@ async def test_generate_role_template_gemini():
     # Clear cache to ensure call is made
     ai_manager.role_template_cache.clear()
 
-    # Mocking _generate_with_gemini directly to simplify test of higher level logic
-    with patch.object(ai_manager, '_generate_with_gemini', new_callable=AsyncMock) as mock_gen:
+    # Mocking _generate_with_gemini_cli directly to simplify test of higher level logic
+    with patch.object(ai_manager, '_generate_with_gemini_cli', new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = '["狼人", "預言家", "平民"]'
 
         # Ensure provider is gemini
@@ -24,7 +24,7 @@ async def test_generate_role_template_gemini():
 
 @pytest.mark.asyncio
 async def test_get_ai_action_vote_gemini():
-    with patch.object(ai_manager, '_generate_with_gemini', new_callable=AsyncMock) as mock_gen:
+    with patch.object(ai_manager, '_generate_with_gemini_cli', new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = '3' # Vote for player 3
         ai_manager.provider = 'gemini'
 
@@ -33,7 +33,7 @@ async def test_get_ai_action_vote_gemini():
 
 @pytest.mark.asyncio
 async def test_get_ai_action_abstain_gemini():
-    with patch.object(ai_manager, '_generate_with_gemini', new_callable=AsyncMock) as mock_gen:
+    with patch.object(ai_manager, '_generate_with_gemini_cli', new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = 'no'
         ai_manager.provider = 'gemini'
 

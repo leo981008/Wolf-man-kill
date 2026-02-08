@@ -381,34 +381,68 @@ class AIManager:
         Generates a speech for an AI player.
         speech_history: List of strings (previous speeches in the round).
         """
-        history_text = ""
-        if speech_history:
-            history_text = "\n本輪發言紀錄：\n" + "\n".join(speech_history)
+        is_first_speaker = not bool(speech_history)
 
         strategy_info = ROLE_STRATEGIES.get(role, {})
         speech_style = strategy_info.get("speech_style", "自然")
         objective = strategy_info.get("objective", "獲得勝利")
         speech_guide = strategy_info.get("speech_guide", "")
 
+        # Construct Dynamic Logic based on position
+        if is_first_speaker:
+            scene_restriction = """
+# 當前場景限制（最重要的一點）
+**現在輪到你發言。你是本輪的「第 1 位」發言者（首置位）。**
+**在你之前「沒有任何玩家」發過言。**
+"""
+            logic_restriction = """
+# 思考邏輯與限制
+1. **絕對禁止** 說「我同意前面玩家的說法」或「聽到有人說...」，因為你是第一個，這會讓你產生幻覺。
+2. 因為你是第一個，場上還沒有邏輯資訊。請根據你的身分選擇策略：
+   - **如果是好人**：請針對昨晚的死亡情況做簡單評論，或者直接承認「目前沒資訊，先聽後面怎麼說」，然後過麥（划水）。
+   - **如果是狼人/神職**：你可以選擇發起一個假話題，或者為了安全起見，裝作無知的平民「划水」。
+3. 你的目標是：符合你所屬陣營的最大利益，並引導局勢（或隱藏自己）。
+"""
+        else:
+            history_text = "\n".join(speech_history)
+            scene_restriction = f"""
+# 當前場景限制
+在你之前已經有 {len(speech_history)} 位玩家發言了。
+以下是他們的發言紀錄：
+{history_text}
+"""
+            logic_restriction = """
+# 思考邏輯與限制
+1. 請仔細分析前面玩家的發言，尋找邏輯漏洞或矛盾點。
+2. 你可以選擇：
+   - 同意或反駁某位玩家的觀點。
+   - 提出新的懷疑對象。
+   - 為自己辯解（如果被懷疑）。
+3. 你的目標是：符合你所屬陣營的最大利益，並引導局勢（或隱藏自己）。
+"""
+
         prompt = f"""
-        你正在玩狼人殺。你是 {player_id} 號玩家。
-        你的真實身分是：{role}。
+# 角色設定
+你是狼人殺遊戲中的玩家，你的編號是 {player_id} 號。
+你的真實身分是【{role}】。
+{game_context}
 
-        你的發言風格應該是：{speech_style}。
-        你的主要目標是：{objective}。
+你的發言風格：{speech_style}
+你的主要目標：{objective}
 
-        詳細指導原則：
-        {speech_guide}
+詳細角色指導：
+{speech_guide}
 
-        當前局勢：{game_context}
-        {history_text}
+{scene_restriction}
 
-        現在輪到你發言。請進行發言（80字左右），分析局勢，多提供一些細節和邏輯推理，或為自己辯解。
-        請使用繁體中文，語氣要自然，像真人玩家一樣。
-        不要暴露你是 AI。
-        最重要的是所有話都一定必須要符合邏輯，也要符合你所屬陣營的最大利益。
-        如果真的沒有資訊，也可以划水
-        """
+# 你的發言任務
+請進行發言（80字左右），語氣要自然，像真人玩家一樣（可以使用口語、語助詞）。
+嚴禁暴露你是 AI。
+
+{logic_restriction}
+
+請開始你的發言：
+"""
         return await self.generate_response(prompt, retry_callback=retry_callback)
 
 # Global instance
