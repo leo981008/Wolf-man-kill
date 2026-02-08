@@ -18,11 +18,15 @@ class AIManager:
         self.provider = os.getenv('AI_PROVIDER', 'gemini').lower()
         self.ollama_model = os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
         self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+        self.gemini_api_key = os.getenv('GEMINI_API_KEY')
+        self.gemini_model = os.getenv('GEMINI_MODEL', 'gemini-pro')
         self.session = None
 
         print(f"AI Manager initialized. Provider: {self.provider}")
         if self.provider == 'ollama':
             print(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
+        elif self.provider == 'gemini-api':
+            print(f"Gemini API Model: {self.gemini_model}")
 
         self.narrative_cache = OrderedDict()
         self.role_template_cache = OrderedDict()
@@ -97,7 +101,7 @@ class AIManager:
             print(f"Ollama Connection Error: {e}")
             return ""
 
-    async def _generate_with_gemini(self, prompt):
+    async def _generate_with_gemini_cli(self, prompt):
         """Executes gemini-cli via subprocess."""
         try:
             # Create subprocess: gemini -p "prompt"
@@ -120,13 +124,53 @@ class AIManager:
             print(f"Gemini Execution Error: {e}")
             return ""
 
+    async def _generate_with_gemini_api(self, prompt):
+        """Executes Gemini via Google API."""
+        if not self.gemini_api_key:
+            print("Gemini API Key is missing.")
+            return ""
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent"
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.gemini_api_key}
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
+
+        try:
+            session = await self.get_session()
+            async with session.post(url, json=payload, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        content = candidates[0].get("content", {})
+                        parts = content.get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "").strip()
+                    return ""
+                else:
+                    error_text = await response.text()
+                    print(f"Gemini API Error: {response.status} - {error_text}")
+                    return ""
+        except Exception as e:
+            print(f"Gemini API Connection Error: {e}")
+            return ""
+
     async def generate_response(self, prompt):
         """Generic async wrapper for generating content"""
         if self.provider == 'ollama':
             return await self._generate_with_ollama(prompt)
+        elif self.provider == 'gemini-api':
+            return await self._generate_with_gemini_api(prompt)
+        elif self.provider == 'gemini-cli' or self.provider == 'gemini':
+            # Default fallback or explicit CLI use
+            return await self._generate_with_gemini_cli(prompt)
 
-        # Default to Gemini (via CLI)
-        return await self._generate_with_gemini(prompt)
+        # Fallback if unknown provider
+        print(f"Unknown provider: {self.provider}, defaulting to Gemini CLI")
+        return await self._generate_with_gemini_cli(prompt)
 
     async def generate_role_template(self, player_count, existing_roles):
         """
@@ -150,6 +194,12 @@ class AIManager:
         response_text = await self.generate_response(prompt)
         try:
             clean_text = response_text.replace("```json", "").replace("```", "").strip()
+            # Try to find JSON array if extra text exists
+            start = clean_text.find('[')
+            end = clean_text.rfind(']')
+            if start != -1 and end != -1:
+                clean_text = clean_text[start:end+1]
+
             roles = json.loads(clean_text)
             if isinstance(roles, list) and len(roles) == player_count:
                 # Validate roles exist
