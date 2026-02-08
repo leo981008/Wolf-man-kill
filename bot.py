@@ -131,6 +131,8 @@ class GameState:
         self.ai_players = []
         self.speech_history = [] # 儲存本輪發言紀錄
         self.role_to_players = {} # 角色 -> 玩家列表 (優化查找)
+        self.day_count = 0
+        self.last_dead_players = []
 
     def reset(self):
         self.players = []
@@ -152,6 +154,8 @@ class GameState:
 
         self.game_mode = "online"
         self.ai_players = []
+        self.day_count = 0
+        self.last_dead_players = []
 
 # Guild ID -> GameState
 games = {}
@@ -609,10 +613,17 @@ async def start_next_turn(channel, game):
         await asyncio.sleep(random.uniform(2, 5))
 
         current_history = []
+        day_count = 0
+        dead_names = []
         async with game.lock:
             current_history = list(game.speech_history)
+            day_count = game.day_count
+            dead_names = list(game.last_dead_players)
 
-        speech = await ai_manager.get_ai_speech(pid, role, "白天發言", current_history, retry_callback=create_retry_callback(channel))
+        dead_info = ", ".join(dead_names) if dead_names else "無"
+        context_str = f"現在是第 {day_count} 天白天。昨晚死亡名單：{dead_info}。"
+
+        speech = await ai_manager.get_ai_speech(pid, role, context_str, current_history, retry_callback=create_retry_callback(channel))
 
         async with game.lock:
             game.speech_history.append(f"{next_player.name}: {speech}")
@@ -632,6 +643,9 @@ async def perform_day(channel, game, dead_players=[]):
     msg = "🌞 **天亮了！** 請開始討論。\n"
     game_over = False
     async with game.lock:
+        game.day_count += 1
+        game.last_dead_players = [p.name for p in dead_players]
+
         if dead_players:
             names = ", ".join([p.name for p in dead_players])
             msg += f"昨晚死亡的是：**{names}**"
@@ -869,6 +883,8 @@ async def start(interaction: discord.Interaction):
         game.player_ids = {}
         game.player_id_map = {}
         game.witch_potions = {'antidote': True, 'poison': True}
+        game.day_count = 0
+        game.last_dead_players = []
 
         player_list_msg_lines = ["**本局玩家列表：**\n"]
         for idx, player in enumerate(active_players, 1):
