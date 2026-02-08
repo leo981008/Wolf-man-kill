@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import aiohttp
+import time
 from collections import OrderedDict
 from ai_strategies import ROLE_STRATEGIES
 
@@ -12,6 +13,45 @@ load_dotenv()
 DIGIT_PATTERN = re.compile(r'\d+')
 
 CACHE_FILE = "ai_cache.json"
+
+class RateLimitError(Exception):
+    """Exception raised when API rate limit is exceeded."""
+    pass
+
+class RateLimiter:
+    """
+    Token Bucket implementation for rate limiting.
+    """
+    def __init__(self, rate, capacity):
+        self.rate = rate  # Tokens per second
+        self.capacity = capacity
+        self.tokens = capacity
+        self.last_update = time.monotonic()
+        self.lock = asyncio.Lock()
+
+    async def acquire(self):
+        async with self.lock:
+            now = time.monotonic()
+            elapsed = now - self.last_update
+            self.tokens += elapsed * self.rate
+            if self.tokens > self.capacity:
+                self.tokens = self.capacity
+            self.last_update = now
+
+            if self.tokens >= 1:
+                self.tokens -= 1
+                return
+
+            # Calculate wait time needed to get 1 token
+            missing = 1 - self.tokens
+            wait_time = missing / self.rate
+
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+
+            # After waiting, we have exactly 0 tokens left (we consumed the one we waited for)
+            self.tokens = 0
+            self.last_update = time.monotonic()
 
 class AIManager:
     def __init__(self):
@@ -27,6 +67,10 @@ class AIManager:
             print(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
         elif self.provider == 'gemini-api':
             print(f"Gemini API Model: {self.gemini_model}")
+
+        # Rate Limiter: 15 RPM = 0.25 requests/sec (1 request every 4 seconds)
+        # Capacity 1 ensures strict spacing.
+        self.rate_limiter = RateLimiter(rate=15/60.0, capacity=1.0)
 
         self.narrative_cache = OrderedDict()
         self.role_template_cache = OrderedDict()
@@ -118,8 +162,14 @@ class AIManager:
                 return stdout.decode().strip()
             else:
                 error_msg = stderr.decode().strip()
+                # Detect rate limit in stderr
+                if "429" in error_msg or "ResourceExhausted" in error_msg:
+                    raise RateLimitError(f"Gemini CLI 429: {error_msg}")
+
                 print(f"Gemini CLI Error: {error_msg}")
                 return ""
+        except RateLimitError:
+            raise
         except Exception as e:
             print(f"Gemini Execution Error: {e}")
             return ""
@@ -150,29 +200,72 @@ class AIManager:
                         if parts:
                             return parts[0].get("text", "").strip()
                     return ""
+                elif response.status == 429:
+                    error_text = await response.text()
+                    raise RateLimitError(f"Gemini API 429: {error_text}")
                 else:
                     error_text = await response.text()
                     print(f"Gemini API Error: {response.status} - {error_text}")
                     return ""
+        except RateLimitError:
+            raise
         except Exception as e:
             print(f"Gemini API Connection Error: {e}")
             return ""
 
-    async def generate_response(self, prompt):
-        """Generic async wrapper for generating content"""
-        if self.provider == 'ollama':
-            return await self._generate_with_ollama(prompt)
-        elif self.provider == 'gemini-api':
-            return await self._generate_with_gemini_api(prompt)
-        elif self.provider == 'gemini-cli' or self.provider == 'gemini':
-            # Default fallback or explicit CLI use
-            return await self._generate_with_gemini_cli(prompt)
+    async def generate_response(self, prompt, retry_callback=None):
+        """
+        Generic async wrapper for generating content with Rate Limiting and Retry logic.
+        """
+        # Define the generation task based on provider
+        async def task():
+            if self.provider == 'ollama':
+                return await self._generate_with_ollama(prompt)
+            elif self.provider == 'gemini-api':
+                return await self._generate_with_gemini_api(prompt)
+            elif self.provider == 'gemini-cli' or self.provider == 'gemini':
+                return await self._generate_with_gemini_cli(prompt)
+            else:
+                print(f"Unknown provider: {self.provider}, defaulting to Gemini CLI")
+                return await self._generate_with_gemini_cli(prompt)
 
-        # Fallback if unknown provider
-        print(f"Unknown provider: {self.provider}, defaulting to Gemini CLI")
-        return await self._generate_with_gemini_cli(prompt)
+        # Retry logic with Rate Limiting
+        max_retries = 3
+        base_delay = 4.0 # Seconds
 
-    async def generate_role_template(self, player_count, existing_roles):
+        for attempt in range(max_retries + 1):
+            try:
+                # Proactive Rate Limiting (only for Gemini)
+                if 'gemini' in self.provider:
+                    await self.rate_limiter.acquire()
+
+                return await task()
+
+            except RateLimitError as e:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"Rate limit hit. Retrying in {delay}s... (Attempt {attempt+1}/{max_retries})")
+
+                    if retry_callback:
+                        try:
+                            # Invoke callback to notify user, but don't fail if it fails
+                            if asyncio.iscoroutinefunction(retry_callback):
+                                await retry_callback()
+                            else:
+                                retry_callback()
+                        except Exception as cb_e:
+                            print(f"Retry callback failed: {cb_e}")
+
+                    await asyncio.sleep(delay)
+                else:
+                    print(f"Rate limit exceeded after {max_retries} retries: {e}")
+                    return ""
+            except Exception as e:
+                print(f"Unexpected error during generation: {e}")
+                return ""
+        return ""
+
+    async def generate_role_template(self, player_count, existing_roles, retry_callback=None):
         """
         Generates a balanced role list for a given player count.
         """
@@ -191,7 +284,7 @@ class AIManager:
         不要包含 markdown 標記或其他文字。
         """
 
-        response_text = await self.generate_response(prompt)
+        response_text = await self.generate_response(prompt, retry_callback=retry_callback)
         try:
             clean_text = response_text.replace("```json", "").replace("```", "").strip()
             # Try to find JSON array if extra text exists
@@ -211,13 +304,14 @@ class AIManager:
                         self.role_template_cache.popitem(last=False)
                     self._save_cache()
                     return roles
-            print(f"Invalid generated roles: {roles}")
+            if response_text: # Only print invalid if we actually got a response
+                print(f"Invalid generated roles: {roles}")
             return []
         except Exception as e:
             print(f"Role generation failed: {e}\nResponse: {response_text}")
             return []
 
-    async def generate_narrative(self, event_type, context, language="zh-TW"):
+    async def generate_narrative(self, event_type, context, language="zh-TW", retry_callback=None):
         """
         Generates flavor text for game events.
         """
@@ -236,17 +330,17 @@ class AIManager:
         事件類型：{event_type}
         詳細資訊：{context}
         """
-        response = await self.generate_response(prompt)
+        response = await self.generate_response(prompt, retry_callback=retry_callback)
 
-        self.narrative_cache[cache_key] = response
-
-        # Evict oldest if over limit
-        if len(self.narrative_cache) > 100:
-            self.narrative_cache.popitem(last=False)
+        if response:
+            self.narrative_cache[cache_key] = response
+            # Evict oldest if over limit
+            if len(self.narrative_cache) > 100:
+                self.narrative_cache.popitem(last=False)
 
         return response
 
-    async def get_ai_action(self, role, game_context, valid_targets, speech_history=None):
+    async def get_ai_action(self, role, game_context, valid_targets, speech_history=None, retry_callback=None):
         """
         Decides an action for an AI player.
         """
@@ -271,7 +365,7 @@ class AIManager:
         如果你決定不行動、空守或棄票，請回傳 'no'。
         只回傳結果，不要解釋。
         """
-        response = await self.generate_response(prompt)
+        response = await self.generate_response(prompt, retry_callback=retry_callback)
         clean = response.strip().lower().replace(".", "")
 
         if "no" in clean:
@@ -282,7 +376,7 @@ class AIManager:
             return match.group()
         return "no"
 
-    async def get_ai_speech(self, player_id, role, game_context, speech_history=None):
+    async def get_ai_speech(self, player_id, role, game_context, speech_history=None, retry_callback=None):
         """
         Generates a speech for an AI player.
         speech_history: List of strings (previous speeches in the round).
@@ -315,7 +409,7 @@ class AIManager:
         最重要的是所有話都一定必須要符合邏輯，也要符合你所屬陣營的最大利益。
         如果真的沒有資訊，也可以划水
         """
-        return await self.generate_response(prompt)
+        return await self.generate_response(prompt, retry_callback=retry_callback)
 
 # Global instance
 ai_manager = AIManager()

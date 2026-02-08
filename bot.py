@@ -161,6 +161,17 @@ def get_game(guild_id):
         games[guild_id] = GameState()
     return games[guild_id]
 
+def create_retry_callback(channel):
+    """
+    Creates a callback function to notify users about rate limit retries.
+    """
+    async def callback():
+        try:
+            await channel.send("⚠️ AI 正在思考中 (連線重試)... 請稍候。")
+        except:
+            pass
+    return callback
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} 已上線！(Slash Commands Enabled)')
@@ -191,7 +202,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 async def announce_event(channel, game, event_type, system_msg):
-    narrative = await ai_manager.generate_narrative(event_type, system_msg)
+    narrative = await ai_manager.generate_narrative(event_type, system_msg, retry_callback=create_retry_callback(channel))
 
     if game.game_mode == "online":
         await channel.send(f"🎙️ **{narrative}**\n\n({system_msg})")
@@ -310,7 +321,7 @@ async def perform_night(channel, game):
     # 輔助：獲取行動
     async def get_action(player, role, prompt, targets=None):
         if hasattr(player, 'bot') and player.bot:
-            return await ai_manager.get_ai_action(role, "夜晚行動", targets if targets else all_player_ids, speech_history=shared_history)
+            return await ai_manager.get_ai_action(role, "夜晚行動", targets if targets else all_player_ids, speech_history=shared_history, retry_callback=create_retry_callback(channel))
         return await request_dm_input(player, prompt, is_valid_id)
 
     # 守衛
@@ -529,7 +540,7 @@ async def perform_ai_voting(channel, game):
         await asyncio.sleep(random.uniform(1, 3))
 
         role = ai_roles.get(ai_player, "平民")
-        target_id = await ai_manager.get_ai_action(role, "白天投票階段", all_targets, speech_history=shared_history)
+        target_id = await ai_manager.get_ai_action(role, "白天投票階段", all_targets, speech_history=shared_history, retry_callback=create_retry_callback(channel))
 
         target_member = None
         is_abstain = (str(target_id).strip().lower() == "no")
@@ -601,7 +612,7 @@ async def start_next_turn(channel, game):
         async with game.lock:
             current_history = list(game.speech_history)
 
-        speech = await ai_manager.get_ai_speech(pid, role, "白天發言", current_history)
+        speech = await ai_manager.get_ai_speech(pid, role, "白天發言", current_history, retry_callback=create_retry_callback(channel))
 
         async with game.lock:
             game.speech_history.append(f"{next_player.name}: {speech}")
@@ -821,7 +832,7 @@ async def start(interaction: discord.Interaction):
             else:
                 # 嘗試 AI 生成
                 await interaction.channel.send("⚠️ 偵測到非標準人數，正在請求 AI 生成平衡板子...")
-                generated_roles = await ai_manager.generate_role_template(current_player_count, list(ROLE_DESCRIPTIONS.keys()))
+                generated_roles = await ai_manager.generate_role_template(current_player_count, list(ROLE_DESCRIPTIONS.keys()), retry_callback=create_retry_callback(interaction.channel))
 
                 if generated_roles:
                     role_pool = generated_roles
