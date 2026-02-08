@@ -263,6 +263,7 @@ class AIManager:
         請使用繁體中文，語氣要自然，像真人玩家一樣。
         不要暴露你是 AI。
         最重要的是所有話都一定必須要符合邏輯，也要符合你所屬陣營的最大利益。
+        如果真的沒有資訊，也可以划水
         """
         return await self.generate_response(prompt)
 
