@@ -107,6 +107,6 @@ class TestOllamaSupport:
             # Verify prompt contains history
             args, _ = mock_gen.call_args
             prompt = args[0]
-            assert "本輪發言紀錄：" in prompt
+            assert "以下是他們的發言紀錄：" in prompt
             assert "P1: Hi" in prompt
             assert "P2: Hello" in prompt

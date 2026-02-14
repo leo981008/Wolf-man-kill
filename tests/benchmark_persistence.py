@@ -21,7 +21,7 @@ async def benchmark():
     ai1 = AIManager()
 
     # Mock slow response
-    async def mock_slow_response(prompt):
+    async def mock_slow_response(prompt, **kwargs):
         await asyncio.sleep(1.0)
         return '["Wolf", "Seer", "Villager"]'
 
