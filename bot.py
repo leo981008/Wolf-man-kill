@@ -325,7 +325,8 @@ async def perform_night(channel, game):
     # 輔助：獲取行動
     async def get_action(player, role, prompt, targets=None):
         if hasattr(player, 'bot') and player.bot:
-            return await ai_manager.get_ai_action(role, "夜晚行動", targets if targets else all_player_ids, speech_history=shared_history, retry_callback=create_retry_callback(channel))
+            alive_count = len(game.players)
+            return await ai_manager.get_ai_action(role, f"夜晚行動。場上存活 {alive_count} 人。", targets if targets else all_player_ids, speech_history=shared_history, retry_callback=create_retry_callback(channel))
         return await request_dm_input(player, prompt, is_valid_id)
 
     # 守衛
@@ -544,7 +545,7 @@ async def perform_ai_voting(channel, game):
         await asyncio.sleep(random.uniform(1, 3))
 
         role = ai_roles.get(ai_player, "平民")
-        target_id = await ai_manager.get_ai_action(role, "白天投票階段", all_targets, speech_history=shared_history, retry_callback=create_retry_callback(channel))
+        target_id = await ai_manager.get_ai_action(role, f"第 {game.day_count} 天白天投票階段。場上存活 {len(game.players)} 人。", all_targets, speech_history=shared_history, retry_callback=create_retry_callback(channel))
 
         target_member = None
         is_abstain = (str(target_id).strip().lower() == "no")
@@ -620,8 +621,9 @@ async def start_next_turn(channel, game):
             day_count = game.day_count
             dead_names = list(game.last_dead_players)
 
+        alive_count = len(game.players)
         dead_info = ", ".join(dead_names) if dead_names else "無"
-        context_str = f"現在是第 {day_count} 天白天。昨晚死亡名單：{dead_info}。"
+        context_str = f"現在是第 {day_count} 天白天。存活玩家: {alive_count} 人。昨晚死亡名單：{dead_info}。"
 
         speech = await ai_manager.get_ai_speech(pid, role, context_str, current_history, retry_callback=create_retry_callback(channel))
 

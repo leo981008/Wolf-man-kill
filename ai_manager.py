@@ -332,6 +332,12 @@ class AIManager:
         請根據以下情境，生成一段富有氛圍的旁白（約 30-50 字）。
         請直接輸出旁白內容，不要加上「主持人：」等前綴。
 
+        氛圍指導：
+        - 天黑事件：使用懸疑、恐怖的語調，營造緊張氣氛。
+        - 天亮事件：如果有死亡，語調沉重悲傷；如果平安夜，語調輕鬆帶有警覺。
+        - 遊戲結束：使用史詩、壯烈的語調。
+        - 每次旁白要有變化，避免重複相同的句式。
+
         ⚠️ 嚴格限制：
         - 你只能根據下方提供的事件資訊生成旁白。
         - 嚴禁透露任何玩家的身分、角色、或未公開的遊戲資訊。
@@ -357,31 +363,43 @@ class AIManager:
         """
         strategy_info = ROLE_STRATEGIES.get(role, {})
         action_guide = strategy_info.get("action_guide", "")
+        voting_guide = strategy_info.get("voting_guide", "")
+        reasoning_guide = strategy_info.get("reasoning_guide", "")
 
         history_text = ""
         if speech_history:
             history_text = "\n本輪發言/討論紀錄：\n" + "\n".join(speech_history)
 
+        # Determine if this is a voting phase or night action
+        is_voting = "投票" in game_context
+        phase_guide = voting_guide if is_voting else action_guide
+        phase_label = "投票決策" if is_voting else "夜晚行動決策"
+
         prompt = f"""
-        你正在玩狼人殺。你的身分是：{role}。
-        當前局勢：{game_context}
-        你可以選擇的目標（玩家編號）有：{valid_targets}。
-        {history_text}
+# {phase_label}
+你正在玩狼人殺。你的身分是：【{role}】。
+當前局勢：{game_context}
+你可以選擇的目標（玩家編號）有：{valid_targets}。
+{history_text}
 
-        策略建議：{action_guide}
+# 決策分析（僅供內部推理，不要輸出分析過程）
+請在心中完成以下分析步驟，然後只輸出最終的目標編號：
+{reasoning_guide}
 
-        請根據你的角色勝利條件做出最佳選擇。
+# 策略指導
+{phase_guide}
 
-        ⚠️ 行動規則（必須遵守）：
-        - 你「只能」從上方列出的「可選擇目標」中選擇一個編號。
-        - 不要選擇不在目標列表中的編號。
-        - 你只能依據上方提供的「當前局勢」和「發言紀錄」做出判斷，不可虛構理由。
-        - 如果資訊不足以做出判斷，請回傳 'no'。
+⚠️ 行動規則（必須遵守）：
+- 你「只能」從上方列出的「可選擇目標」中選擇一個編號。
+- 不要選擇不在目標列表中的編號。
+- 你只能依據上方提供的「當前局勢」和「發言紀錄」做出判斷，不可虛構理由。
+- 如果資訊不足以做出判斷，請回傳 'no'。
 
-        請只回傳你選擇的目標編號（數字）。
-        如果你決定不行動、空守或棄票，請回傳 'no'。
-        只回傳結果，不要解釋。
-        """
+# 輸出格式
+請只回傳你選擇的目標編號（一個數字）。
+如果你決定不行動、空守或棄票，請回傳 'no'。
+只回傳結果，不要解釋。
+"""
         response = await self.generate_response(prompt, retry_callback=retry_callback)
         clean = response.strip().lower().replace(".", "")
 
@@ -392,6 +410,21 @@ class AIManager:
         if match:
             return match.group()
         return "no"
+
+    def _get_phase_name(self, game_context):
+        """
+        Determines the game phase (early/mid/late) from the game context string.
+        """
+        day_match = re.search(r'第\s*(\d+)\s*天', game_context)
+        if day_match:
+            day = int(day_match.group(1))
+            if day <= 2:
+                return "early"
+            elif day <= 4:
+                return "mid"
+            else:
+                return "late"
+        return "early"
 
     async def get_ai_speech(self, player_id, role, game_context, speech_history=None, retry_callback=None):
         """
@@ -404,6 +437,14 @@ class AIManager:
         speech_style = strategy_info.get("speech_style", "自然")
         objective = strategy_info.get("objective", "獲得勝利")
         speech_guide = strategy_info.get("speech_guide", "")
+        reasoning_guide = strategy_info.get("reasoning_guide", "")
+
+        # Phase-specific strategy
+        phase = self._get_phase_name(game_context)
+        phase_guides = strategy_info.get("phase_guide", {})
+        current_phase_guide = phase_guides.get(phase, "")
+        phase_labels = {"early": "前期（Day 1-2）", "mid": "中期（Day 3-4）", "late": "殘局（Day 5+）"}
+        phase_label = phase_labels.get(phase, "前期")
 
         # Construct Dynamic Logic based on position
         if is_first_speaker:
@@ -420,8 +461,9 @@ class AIManager:
 # 思考邏輯與限制
 1. **絕對禁止** 說「我同意前面玩家的說法」或「聽到有人說...」，因為你是第一個，這會讓你產生幻覺。
 2. 因為你是第一個，場上還沒有邏輯資訊。請根據你的身分選擇策略：
-   - **如果是好人**：請針對昨晚的死亡情況做簡單評論，或者直接承認「目前沒資訊，先聽後面怎麼說」，然後過麥（划水）。
-   - **如果是狼人/神職**：你可以選擇發起一個假話題，或者為了安全起見，裝作無知的平民「划水」。
+   - **如果你有夜晚資訊（神職）**：可以選擇起跳報資訊，或者隱藏身分先觀察。
+   - **如果你沒有夜晚資訊（平民）**：針對昨晚的死亡情況做評論，表達你的初步判斷。不要只是說「沒資訊」就結束——至少對局勢提出一個觀點或問題。
+   - **如果你是狼人**：選擇偽裝策略。可以發起一個話題引導討論方向，或者低調模仿平民。
 3. 你的目標是：符合你所屬陣營的最大利益，並引導局勢（或隱藏自己）。
 """
         else:
@@ -432,14 +474,18 @@ class AIManager:
 以下是他們的發言紀錄：
 {history_text}
 """
-            logic_restriction = """
+            logic_restriction = f"""
 # 思考邏輯與限制
-1. 請仔細分析前面玩家的發言，尋找邏輯漏洞或矛盾點。
+1. 你必須參考前面玩家的發言內容。具體做法：
+   - 選擇 1-2 位前面發言的玩家，引用他們的觀點（使用「X 號說...」的格式）。
+   - 明確表達你是同意還是反對，並給出理由。
 2. 你可以選擇：
-   - 同意或反駁某位玩家的觀點。
-   - 提出新的懷疑對象。
-   - 為自己辯解（如果被懷疑）。
-3. 你的目標是：符合你所屬陣營的最大利益，並引導局勢（或隱藏自己）。
+   - 站邊：支持某位玩家的邏輯，攻擊另一位。
+   - 質疑：指出某位玩家發言中的矛盾或可疑之處。
+   - 辯解：如果之前有人懷疑你，回應他的質疑。
+   - 歸票：明確說出你認為應該票誰。
+3. 你的發言必須有「落點」——最後要給出一個明確的態度或結論。
+4. 你的目標是：符合你所屬陣營的最大利益，並引導局勢（或隱藏自己）。
 
 **嚴禁捏造資訊**：你只能引用上方「發言紀錄」中實際出現的內容。
 禁止聲稱任何玩家說了紀錄中沒有的話。
@@ -455,13 +501,21 @@ class AIManager:
 你的發言風格：{speech_style}
 你的主要目標：{objective}
 
-詳細角色指導：
+# 角色策略
 {speech_guide}
+
+# 當前階段策略（{phase_label}）
+{current_phase_guide}
 
 {scene_restriction}
 
+# 思考步驟（在心中完成以下分析，不要將分析過程輸出到發言中）
+{reasoning_guide}
+綜合以上分析，決定你的發言策略，然後直接輸出你的發言內容。
+
 # 你的發言任務
-請進行發言（80字左右），語氣要自然，像真人玩家一樣（可以使用口語、語助詞）。
+請進行發言（80-120字），語氣要自然，像真人玩家一樣（可以使用口語、語助詞）。
+你的發言必須包含至少一個具體的觀點或判斷，不要空泛地划水。
 嚴禁暴露你是 AI。
 
 # ⚠️ 防止幻覺規則（最高優先級）
@@ -471,7 +525,7 @@ class AIManager:
 
 {logic_restriction}
 
-請開始你的發言：
+請開始你的發言（只輸出發言內容，不要輸出分析過程）：
 """
         return await self.generate_response(prompt, retry_callback=retry_callback)
 
