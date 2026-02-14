@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bot
+from bot import AIPlayer
 
 class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -14,71 +15,68 @@ class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
         bot.games = {}
 
     async def test_god_and_join_switching(self):
-        ctx = MagicMock()
-        ctx.guild.id = 1001
-        ctx.author = MagicMock()
-        ctx.author.name = "User1"
-        ctx.author.mention = "@User1"
-        ctx.send = AsyncMock()
+        interaction = MagicMock()
+        interaction.guild_id = 1001
+        interaction.user = MagicMock()
+        interaction.user.name = "User1"
+        interaction.user.mention = "@User1"
+        interaction.response.send_message = AsyncMock()
+        interaction.channel.send = AsyncMock()
 
-        game = bot.get_game(ctx.guild.id)
+        game = bot.get_game(interaction.guild_id)
 
         # 1. Join as player
-        await bot.join(ctx)
-        self.assertIn(ctx.author, game.players)
-        self.assertNotIn(ctx.author, game.gods)
+        await bot.join.callback(interaction)
+        self.assertIn(interaction.user, game.players)
+        self.assertNotIn(interaction.user, game.gods)
 
         # 2. Switch to God
-        await bot.god(ctx)
-        self.assertNotIn(ctx.author, game.players)
-        self.assertIn(ctx.author, game.gods)
-
-        # Check if correct message sent
-        # We look for "User1 已加入天神組"
-        found = any("已加入天神組" in str(call) for call in ctx.send.mock_calls)
-        self.assertTrue(found)
+        await bot.god.callback(interaction)
+        self.assertNotIn(interaction.user, game.players)
+        self.assertIn(interaction.user, game.gods)
 
         # 3. Switch back to Player
-        await bot.join(ctx)
-        self.assertIn(ctx.author, game.players)
-        self.assertNotIn(ctx.author, game.gods)
+        await bot.join.callback(interaction)
+        self.assertIn(interaction.user, game.players)
+        self.assertNotIn(interaction.user, game.gods)
 
     async def test_god_mid_game(self):
-        ctx = MagicMock()
-        ctx.guild.id = 1001
-        ctx.author = MagicMock()
-        ctx.author.name = "Quitter"
-        ctx.author.mention = "@Quitter"
-        ctx.send = AsyncMock()
+        interaction = MagicMock()
+        interaction.guild_id = 1001
+        interaction.user = MagicMock()
+        interaction.user.name = "Quitter"
+        interaction.user.mention = "@Quitter"
+        interaction.response.send_message = AsyncMock()
+        interaction.channel.send = AsyncMock()
 
-        game = bot.get_game(ctx.guild.id)
+        game = bot.get_game(interaction.guild_id)
         game.game_active = True
-        game.players = [ctx.author]
+        game.players = [interaction.user]
         game.gods = []
 
-        await bot.god(ctx)
+        await bot.god.callback(interaction)
 
-        self.assertNotIn(ctx.author, game.players)
-        self.assertIn(ctx.author, game.gods)
+        self.assertNotIn(interaction.user, game.players)
+        self.assertIn(interaction.user, game.gods)
 
-        # Check if the specific message was sent
-        expected_msg = f"{ctx.author.mention} 已從玩家轉為天神。"
-        found = any(call.args[0] == expected_msg for call in ctx.send.mock_calls)
+        # Check if the specific message was sent via channel.send
+        expected_msg = f"{interaction.user.mention} 已從玩家轉為天神。"
+        found = any(call.args[0] == expected_msg for call in interaction.channel.send.mock_calls)
         self.assertTrue(found)
 
     @patch('bot.perform_night', new_callable=AsyncMock)
     async def test_start_preserves_gods(self, mock_night):
-        ctx = MagicMock()
-        ctx.guild.id = 1001
-        ctx.author = MagicMock()
-        ctx.author.name = "Host"
-        ctx.send = AsyncMock()
-        ctx.author.send = AsyncMock()
-        ctx.channel = MagicMock()
-        ctx.channel.set_permissions = AsyncMock()
-        ctx.guild.default_role = MagicMock()
+        interaction = MagicMock()
+        interaction.guild_id = 1001
+        interaction.user = MagicMock()
+        interaction.user.name = "Host"
+        interaction.response.send_message = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        interaction.channel.send = AsyncMock()
+        interaction.user.send = AsyncMock()
+        interaction.guild.default_role = MagicMock()
 
-        game = bot.get_game(ctx.guild.id)
+        game = bot.get_game(interaction.guild_id)
 
         # Setup: 1 God, 3 Players (Host is God)
         god_user = MagicMock()
@@ -94,47 +92,48 @@ class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
         game.players = [p1, p2, p3]
 
         # Host runs start.
-        await bot.start(ctx)
+        await bot.start.callback(interaction)
 
         self.assertIn(god_user, game.gods)
-        self.assertIn(ctx.author, game.gods) # Host added
+        self.assertIn(interaction.user, game.gods) # Host added
         self.assertTrue(game.game_active)
 
     async def test_die_command(self):
-        ctx = MagicMock()
-        ctx.guild.id = 1001
-        ctx.channel.set_permissions = AsyncMock()
-        ctx.guild.default_role = MagicMock()
-        ctx.author = MagicMock()
-        ctx.author.name = "GodUser"
-        # Explicitly set permissions to False to test creator logic, or True for Admin
-        ctx.author.guild_permissions.administrator = False
-        ctx.send = AsyncMock()
-        ctx.author.send = AsyncMock()
+        interaction = MagicMock()
+        interaction.guild_id = 1001
+        interaction.channel.set_permissions = AsyncMock()
+        interaction.guild.default_role = MagicMock()
+        interaction.user = MagicMock()
+        interaction.user.name = "GodUser"
+        # Explicitly set permissions to False to test creator logic
+        interaction.user.guild_permissions.administrator = False
+        interaction.response.send_message = AsyncMock()
+        interaction.channel.send = AsyncMock()
 
-        game = bot.get_game(ctx.guild.id)
+        game = bot.get_game(interaction.guild_id)
         game.game_active = True
-        game.creator = ctx.author # Make author the creator
+        game.creator = interaction.user # Make author the creator
 
         # Setup players and gods
         victim = MagicMock()
         victim.name = "Victim"
         victim.mention = "@Victim"
+        # We need to set up player_ids map because die command uses ID
+        game.player_ids[1] = victim
+        game.player_id_map[victim] = 1
 
         survivor = MagicMock()
         survivor.name = "Survivor"
+        game.player_ids[2] = survivor
+        game.player_id_map[survivor] = 2
 
         game.players = [victim, survivor]
         game.roles = {victim: "狼人", survivor: "平民"}
 
-        game.gods = [ctx.author]
+        game.gods = [interaction.user]
 
-        # Need to mock player_ids for die command to work with ID if used,
-        # but here we use string name.
-        # The die command tries MemberConverter.
-
-        with patch('discord.ext.commands.MemberConverter.convert', new=AsyncMock(return_value=victim)):
-            await bot.die(ctx, target="Victim")
+        # Call die with ID "1"
+        await bot.die.callback(interaction, target="1")
 
         # Verify victim removed
         self.assertNotIn(victim, game.players)
@@ -142,7 +141,7 @@ class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
 
         # Verify public message
         expected_msg = f"👑 天神執行了處決，**{victim.name}** 已死亡。"
-        found = any(call.args[0] == expected_msg for call in ctx.send.mock_calls)
+        found = any(call.args[0] == expected_msg for call in interaction.response.send_message.mock_calls)
         self.assertTrue(found)
 
 if __name__ == "__main__":
