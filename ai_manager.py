@@ -21,7 +21,7 @@ load_dotenv()
 DIGIT_PATTERN = re.compile(r'\d+')
 DAY_PATTERN = re.compile(r'第\s*(\d+)\s*天')
 
-CALLBACK_TIMEOUT = aiohttp.ClientTimeout(total=30)
+CALLBACK_TIMEOUT = aiohttp.ClientTimeout(total=120)
 
 ALLOWED_URL_SCHEMES = ('http://', 'https://')
 
@@ -160,19 +160,19 @@ class AIManager:
             "prompt": prompt,
             "stream": False
         }
-        try:
-            session = await self.get_session()
-            async with session.post(url, json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("response", "").strip()
-                else:
-                    error_text = await response.text()
-                    logger.error(f"Ollama API Error: {response.status} - {error_text}")
-                    return ""
-        except Exception as e:
-            logger.error(f"Ollama Connection Error: {e}")
-            return ""
+        # Let exceptions bubble up to generate_response for retry logic
+        session = await self.get_session()
+        async with session.post(url, json=payload) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data.get("response", "").strip()
+            else:
+                error_text = await response.text()
+                logger.error(f"Ollama API Error: {response.status} - {error_text}")
+                # Raise exception to trigger retry if it's a server error
+                if response.status >= 500:
+                    raise aiohttp.ClientError(f"Ollama Server Error: {response.status}")
+                return ""
 
     async def _generate_with_gemini_cli(self, prompt):
         """Executes gemini-cli via subprocess."""
@@ -270,10 +270,10 @@ class AIManager:
 
                 return await task()
 
-            except RateLimitError as e:
+            except (RateLimitError, aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < max_retries:
                     delay = base_delay * (2 ** attempt)
-                    logger.warning(f"Rate limit hit. Retrying in {delay}s... (Attempt {attempt+1}/{max_retries})")
+                    logger.warning(f"Connection/Rate limit error: {e}. Retrying in {delay}s... (Attempt {attempt+1}/{max_retries})")
 
                     if retry_callback:
                         try:
@@ -287,10 +287,12 @@ class AIManager:
 
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"Rate limit exceeded after {max_retries} retries: {e}")
+                    logger.error(f"Operation failed after {max_retries} retries: {e}")
                     return ""
             except Exception as e:
                 logger.error(f"Unexpected error during generation: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return ""
         return ""
 
