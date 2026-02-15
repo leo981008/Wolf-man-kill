@@ -1,4 +1,5 @@
 import os
+import inspect
 import logging
 import tempfile
 from dotenv import load_dotenv
@@ -277,7 +278,7 @@ class AIManager:
                     if retry_callback:
                         try:
                             # Invoke callback to notify user, but don't fail if it fails
-                            if asyncio.iscoroutinefunction(retry_callback):
+                            if inspect.iscoroutinefunction(retry_callback):
                                 await retry_callback()
                             else:
                                 retry_callback()

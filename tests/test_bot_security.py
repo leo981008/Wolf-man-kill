@@ -18,7 +18,9 @@ class MockContext:
         self.response = MagicMock()
         self.response.send_message = AsyncMock()
         self.channel = MagicMock()
+        self.channel.send = AsyncMock()
         self.channel.set_permissions = AsyncMock()
+        self.channel.guild = MagicMock()
 
 @pytest.mark.asyncio
 async def test_join_concurrency():
@@ -109,6 +111,7 @@ async def test_die_permission_bypass():
     admin.guild_permissions.administrator = True
 
     game.creator = creator
+    game.game_active = True
 
     # Case 1: Random user tries to use !die
     ctx = MockContext(2, guild_id)
