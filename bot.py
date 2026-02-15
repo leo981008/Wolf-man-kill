@@ -508,7 +508,7 @@ async def perform_night(channel, game):
             if p and p in game.players:
                 dead_players_list.append(p)
 
-    await perform_day(channel, game, dead_players_list)
+    await perform_day(channel, game, dead_players_list, poison_victim_id=witch_poison)
 
 async def set_player_mute(member, mute=True):
     if not hasattr(member, 'voice') or not member.voice: return
@@ -641,7 +641,75 @@ async def start_next_turn(channel, game):
         await set_player_mute(next_player, True)
         await start_next_turn(channel, game)
 
-async def perform_day(channel, game, dead_players=None):
+async def handle_death_rattle(channel, game, dead_players, poison_victim_id=None):
+    """處理死亡玩家的技能 (如獵人開槍)"""
+    new_dead_players = []
+    
+    # 避免重複處理
+    processed_players = set()
+    
+    current_dead_batch = list(dead_players)
+    
+    while current_dead_batch:
+        next_batch = []
+        for player in current_dead_batch:
+            if player in processed_players:
+                continue
+            processed_players.add(player)
+            
+            # 檢查是否為獵人
+            role = "未知"
+            player_id = None
+            async with game.lock:
+                role = game.roles.get(player, "未知")
+                player_id = game.player_id_map.get(player, None)
+
+            # 獵人: 死亡時可開槍，除非被毒死
+            if role == "獵人":
+                is_poisoned = (player_id == poison_victim_id)
+                if is_poisoned:
+                    await announce_event(channel, game, "獵人死亡", f"{player.mention} 試圖開槍，但發現槍管裡裝的是... 毒藥？(無法發動技能)")
+                else:
+                    # 詢問目標
+                    await announce_event(channel, game, "獵人發動技能", f"{player.mention} 死亡時扣下了扳機！")
+                    
+                    target_id = None
+                    if hasattr(player, 'bot') and player.bot:
+                         # AI Logic
+                         alive_count = len(game.players)
+                         async with game.lock:
+                             shared_history = list(game.speech_history)
+                             all_ids = list(game.player_ids.keys())
+                             
+                         target_id = await ai_manager.get_ai_action("獵人", f"你已死亡。請選擇射擊目標。場上存活: {alive_count}", all_ids, speech_history=shared_history, retry_callback=create_retry_callback(channel))
+                    else:
+                        # Human Logic
+                        def is_valid(c):
+                             if c.strip().lower() == 'no': return True
+                             return c.isdigit() and int(c) in game.player_ids
+                        
+                        target_id = await request_dm_input(player, "🔫 **獵人請注意。** 你已死亡，請輸入想要射擊的玩家編號 (輸入 no 放棄):", is_valid)
+
+                    if target_id and str(target_id).strip().lower() != 'no':
+                        victim = None
+                        async with game.lock:
+                            victim = game.player_ids.get(int(target_id))
+                            if victim and victim in game.players:
+                                game.players.remove(victim) # 立即死亡
+                                game.last_dead_players.append(victim.name) # 加入死亡名單顯示
+                                
+                        if victim:
+                            await announce_event(channel, game, "獵人開槍", f"砰！**{victim.name}** 被帶走了。")
+                            next_batch.append(victim) # 加入下一批檢查
+                            new_dead_players.append(victim)
+                    else:
+                        await announce_event(channel, game, "獵人開槍", f"{player.mention} 選擇了不開槍。")
+
+        current_dead_batch = next_batch
+        
+    return new_dead_players
+
+async def perform_day(channel, game, dead_players=None, poison_victim_id=None):
     if dead_players is None:
         dead_players = []
     try:
@@ -667,6 +735,15 @@ async def perform_day(channel, game, dead_players=None):
         game_over = not game.game_active
 
     await announce_event(channel, game, "天亮", msg)
+
+    # 處理亡語 (獵人)
+    if dead_players:
+         extra_dead = await handle_death_rattle(channel, game, dead_players, poison_victim_id)
+         if extra_dead:
+             # 有人被獵人帶走，需要更新 game_over 檢查
+             async with game.lock:
+                 await check_game_over(channel, game)
+                 game_over = not game.game_active
 
     if not game_over:
         await channel.send("🔊 **進入依序發言階段**，正在隨機排序並設定靜音...")
@@ -712,6 +789,13 @@ async def resolve_votes(channel, game):
             game.votes = {}
             game.voted_players = set()
             await check_game_over(channel, game)
+            
+        # 票出也能發動技能 (不算毒死)
+        if game.game_active: # 只有遊戲未結束才處理
+             extra_dead = await handle_death_rattle(channel, game, [victim], poison_victim_id=None)
+             if extra_dead:
+                 async with game.lock:
+                     await check_game_over(channel, game)
 
 # Slash Commands
 
