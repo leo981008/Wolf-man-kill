@@ -798,17 +798,21 @@ async def check_ollama_connection(ai: AIManager) -> bool:
 async def main():
     parser = argparse.ArgumentParser(description="AI 智商測試程式 (Werewolf AI IQ Benchmark)")
     parser.add_argument("--games", type=int, default=3, help="模擬局數 (預設: 3)")
+    parser.add_argument("--players", type=int, default=9, help="玩家人數 (目前僅支援 9)")
+    parser.add_argument("--model", type=str, help="指定 Ollama 模型 (預設: env OLLAMA_MODEL 或 gpt-oss:20b)")
     parser.add_argument("--quiet", action="store_true", help="安靜模式 (只顯示最終報告)")
     args = parser.parse_args()
+
+    model_name = args.model or os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
 
     print(f"\n{C.BOLD}{C.CYAN}{'═'*60}{C.RESET}")
     print(f"{C.BOLD}{C.CYAN}  🧠 AI 智商測試程式 — 狼人殺 AI IQ Benchmark{C.RESET}")
     print(f"{C.BOLD}{C.CYAN}{'═'*60}{C.RESET}")
-    print(f"  模型: {os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')}")
+    print(f"  模型: {model_name}")
     print(f"  模擬局數: {args.games}")
     print(f"  配置: 9人局 (3狼 + 預女獵 + 3平民)\n")
 
-    ai = AIManager()
+    ai = AIManager(ollama_model=args.model)
 
     # 連線檢查
     if ai.provider == 'ollama':

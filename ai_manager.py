@@ -67,9 +67,9 @@ class RateLimiter:
             self.last_update = time.monotonic()
 
 class AIManager:
-    def __init__(self):
+    def __init__(self, ollama_model=None):
         self.provider = os.getenv('AI_PROVIDER', 'gemini').lower()
-        self.ollama_model = os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
+        self.ollama_model = ollama_model or os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
         self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
         self.gemini_api_key = os.getenv('GEMINI_API_KEY')
         self.gemini_model = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-lite')
