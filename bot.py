@@ -230,6 +230,13 @@ async def announce_event(channel, game, event_type, system_msg):
         else:
             await channel.send(f"*(已發送台詞給主持人 {game.creator.name})*")
 
+async def announce_last_words(channel, game, player, content):
+    """公佈遺言"""
+    async with game.lock:
+        game.speech_history.append(f"{player.name} (遺言): {content}")
+    
+    await channel.send(f"📢 **{player.name} 的遺言**：\n> {content}")
+
 async def check_game_over(channel, game):
     """檢查是否滿足獲勝條件 (需在 Lock 保護下呼叫)"""
     if not game.game_active:
@@ -758,6 +765,50 @@ async def perform_day(channel, game, dead_players=None, poison_victim_id=None):
         await mute_all_players(channel, game)
         await start_next_turn(channel, game)
 
+    
+
+async def request_last_words(channel, game, player):
+    """請求玩家發表遺言"""
+    try:
+        await channel.send(f"🎤 **請 {player.mention} 發表遺言。** (限時 60 秒)")
+        
+        content = None
+        if hasattr(player, 'bot') and player.bot:
+            # AI Logic
+            async with game.lock:
+                role = game.roles.get(player, "平民")
+                shared_history = list(game.speech_history)
+                # 使用剛更新的 ai_manager 方法
+                # Context: 告知 AI 它被票出了
+                msg = await ai_manager.get_ai_last_words(
+                    player.name, 
+                    role, 
+                    f"現在是第 {game.day_count} 天，你被投票處決了。", 
+                    speech_history=shared_history,
+                    retry_callback=create_retry_callback(channel)
+                )
+                content = msg
+                # 模擬輸入延遲
+                await asyncio.sleep(random.uniform(3, 6))
+        else:
+            # Human Logic
+            def check(m):
+                return m.author == player and m.channel == channel and not m.author.bot
+            
+            try:
+                msg = await bot.wait_for('message', check=check, timeout=60.0)
+                content = msg.content
+            except asyncio.TimeoutError:
+                await channel.send("⏳ 時間到，未留下遺言。")
+                return
+
+        if content:
+             await announce_last_words(channel, game, player, content)
+            
+    except Exception as e:
+        logger.error(f"Error in request_last_words: {e}")
+        await channel.send("(遺言環節發生錯誤，跳過)")
+
 async def resolve_votes(channel, game):
     async with game.lock:
         if not game.votes:
@@ -790,6 +841,10 @@ async def resolve_votes(channel, game):
             game.voted_players = set()
             await check_game_over(channel, game)
             
+        # 遺言階段 (只有被投票出局且遊戲仍在進行時)
+        if game.game_active:
+             await request_last_words(channel, game, victim)
+
         # 票出也能發動技能 (不算毒死)
         if game.game_active: # 只有遊戲未結束才處理
              extra_dead = await handle_death_rattle(channel, game, [victim], poison_victim_id=None)

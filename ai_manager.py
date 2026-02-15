@@ -568,5 +568,43 @@ class AIManager:
         response = await self.generate_response(prompt, retry_callback=retry_callback)
         return self._truncate_response(response)
 
+    async def get_ai_last_words(self, player_id, role, game_context, speech_history=None, retry_callback=None):
+        """
+        Generates a last words message for an AI player who has just been voted out.
+        """
+        strategy_info = ROLE_STRATEGIES.get(role, {})
+        speech_style = strategy_info.get("speech_style", "自然")
+        objective = strategy_info.get("objective", "獲得勝利")
+
+        prompt = f"""
+# 角色設定
+你是狼人殺遊戲中的玩家，你的編號是 {player_id} 號。
+你的真實身分是【{role}】。
+{game_context}
+
+# 當前狀況
+**你剛剛被投票處決了。**
+現在是你發表「遺言」的時間。這是你對場上玩家說的最後一句話。
+
+你的發言風格：{speech_style}
+你的主要目標：{objective}
+
+# 思考邏輯
+1. 根據你的陣營決定策略：
+   - **好人陣營**：誠懇地告訴大家你是好人，提醒大家注意誰是狼，或者分析剛才的票型。
+   - **狼人陣營**：偽裝成好人被誤殺的樣子，表現出憤怒、委屈，或者繼續誤導好人去推別人。
+2. 參考剛才的局勢（誰投了你？誰救了你？）。
+3. 這是最後的機會，讓大家相信你的身分。
+
+# 你的任務
+請簡短地發表遺言（30-50字）。
+語氣要符合你的角色設定（{speech_style}）。
+嚴禁暴露你是 AI。
+
+請直接輸出遺言內容：
+"""
+        response = await self.generate_response(prompt, retry_callback=retry_callback)
+        return self._truncate_response(response)
+
 # Global instance
 ai_manager = AIManager()
