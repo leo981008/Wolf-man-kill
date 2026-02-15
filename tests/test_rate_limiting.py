@@ -16,12 +16,15 @@ class TestRateLimitFix(unittest.IsolatedAsyncioTestCase):
         self.manager.gemini_api_key = 'fake-key'
         self.manager.gemini_model = 'gemini-pro'
 
-        # Speed up the test by reducing retry delay and rate limit
-        # We can't easily change the hardcoded delay in generate_response without monkeypatching or
-        # checking if I made it configurable. I hardcoded `base_delay = 4.0`.
-        # I should probably just mock asyncio.sleep to skip the wait.
+        # Mock RateLimiter to avoid waiting 4s per call
+        self.manager.rate_limiter.acquire = AsyncMock()
+
+        # Mock asyncio.sleep to avoid waiting 4s/8s/16s
+        self.sleep_patcher = patch('asyncio.sleep', new_callable=AsyncMock)
+        self.mock_sleep = self.sleep_patcher.start()
 
     async def asyncTearDown(self):
+        self.sleep_patcher.stop()
         await self.manager.close()
 
     async def test_retry_on_429_persistent_failure(self):
@@ -42,24 +45,19 @@ class TestRateLimitFix(unittest.IsolatedAsyncioTestCase):
         mock_post_ctx.__aexit__ = AsyncMock(return_value=None)
         mock_session.post = MagicMock(return_value=mock_post_ctx)
 
-        # Mock RateLimiter to avoid waiting 4s per call
-        self.manager.rate_limiter.acquire = AsyncMock()
+        retry_callback = AsyncMock()
 
-        # Mock asyncio.sleep to avoid waiting 4s/8s/16s
-        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
-            retry_callback = AsyncMock()
+        response = await self.manager.generate_response("test", retry_callback=retry_callback)
 
-            response = await self.manager.generate_response("test", retry_callback=retry_callback)
+        self.assertEqual(response, "", "Should return empty string after exhaustion")
+        self.assertEqual(mock_session.post.call_count, 4, "Should call API 4 times (1 + 3 retries)")
+        self.assertEqual(retry_callback.call_count, 3, "Callback should be called 3 times")
 
-            self.assertEqual(response, "", "Should return empty string after exhaustion")
-            self.assertEqual(mock_session.post.call_count, 4, "Should call API 4 times (1 + 3 retries)")
-            self.assertEqual(retry_callback.call_count, 3, "Callback should be called 3 times")
-
-            # Verify sleeps: 4, 8, 16
-            expected_calls = [unittest.mock.call(4.0), unittest.mock.call(8.0), unittest.mock.call(16.0)]
-            # Note: There might be other sleeps from rate limiter if I didn't mock it well?
-            # I mocked rate_limiter.acquire, so only generate_response sleeps should happen.
-            mock_sleep.assert_has_calls(expected_calls)
+        # Verify sleeps: 4, 8, 16
+        expected_calls = [unittest.mock.call(4.0), unittest.mock.call(8.0), unittest.mock.call(16.0)]
+        # Note: There might be other sleeps from rate limiter if I didn't mock it well?
+        # I mocked rate_limiter.acquire in asyncSetUp, so only generate_response sleeps should happen.
+        self.mock_sleep.assert_has_calls(expected_calls)
 
     async def test_retry_success_after_failure(self):
         """
@@ -90,18 +88,15 @@ class TestRateLimitFix(unittest.IsolatedAsyncioTestCase):
 
         mock_session.post = MagicMock(return_value=ctx)
 
-        self.manager.rate_limiter.acquire = AsyncMock()
+        retry_callback = AsyncMock()
 
-        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
-            retry_callback = AsyncMock()
+        response = await self.manager.generate_response("test", retry_callback=retry_callback)
 
-            response = await self.manager.generate_response("test", retry_callback=retry_callback)
+        self.assertEqual(response, "Success!", "Should return success response")
+        self.assertEqual(mock_session.post.call_count, 2, "Should call API 2 times")
+        self.assertEqual(retry_callback.call_count, 1, "Callback should be called 1 time")
 
-            self.assertEqual(response, "Success!", "Should return success response")
-            self.assertEqual(mock_session.post.call_count, 2, "Should call API 2 times")
-            self.assertEqual(retry_callback.call_count, 1, "Callback should be called 1 time")
-
-            mock_sleep.assert_called_once_with(4.0)
+        self.mock_sleep.assert_called_once_with(4.0)
 
 if __name__ == '__main__':
     unittest.main()
