@@ -1,4 +1,6 @@
 import os
+import logging
+import tempfile
 from dotenv import load_dotenv
 import asyncio
 import json
@@ -8,10 +10,19 @@ import time
 from collections import OrderedDict
 from ai_strategies import ROLE_STRATEGIES
 
+logger = logging.getLogger(__name__)
+
+# 最大回應長度（符合 Discord 訊息限制）
+MAX_RESPONSE_LENGTH = 2000
+
 load_dotenv()
 
 DIGIT_PATTERN = re.compile(r'\d+')
 DAY_PATTERN = re.compile(r'第\s*(\d+)\s*天')
+
+CALLBACK_TIMEOUT = aiohttp.ClientTimeout(total=30)
+
+ALLOWED_URL_SCHEMES = ('http://', 'https://')
 
 CACHE_FILE = "ai_cache.json"
 
@@ -63,11 +74,15 @@ class AIManager:
         self.gemini_model = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-lite')
         self.session = None
 
-        print(f"AI Manager initialized. Provider: {self.provider}")
+        logger.info(f"AI Manager initialized. Provider: {self.provider}")
         if self.provider == 'ollama':
-            print(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
+            # 驗證 Ollama URL scheme
+            if not any(self.ollama_host.startswith(scheme) for scheme in ALLOWED_URL_SCHEMES):
+                logger.warning(f"Ollama host URL scheme not allowed: {self.ollama_host}. Resetting to default.")
+                self.ollama_host = 'http://localhost:11434'
+            logger.info(f"Ollama Model: {self.ollama_model}, Host: {self.ollama_host}")
         elif self.provider == 'gemini-api':
-            print(f"Gemini API Model: {self.gemini_model}")
+            logger.info(f"Gemini API Model: {self.gemini_model}")
 
         # Rate Limiter: 15 RPM = 0.25 requests/sec (1 request every 4 seconds)
         # Capacity 1 ensures strict spacing.
@@ -97,9 +112,9 @@ class AIManager:
                 key = (player_count, existing_roles)
                 self.role_template_cache[key] = roles
 
-            print(f"Loaded {len(self.role_template_cache)} entries from cache.")
+            logger.info(f"Loaded {len(self.role_template_cache)} entries from cache.")
         except Exception as e:
-            print(f"Failed to load cache: {e}")
+            logger.error(f"Failed to load cache: {e}")
 
     def _save_cache(self):
         try:
@@ -111,14 +126,26 @@ class AIManager:
                     "roles": roles
                 })
 
-            with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            # 原子寫入：先寫入臨時檔再重新命名，防止寫入中斷導致檔案損壞
+            dir_name = os.path.dirname(os.path.abspath(CACHE_FILE))
+            fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.tmp')
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, CACHE_FILE)
+            except Exception:
+                # 清理臨時檔
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
-            print(f"Failed to save cache: {e}")
+            logger.error(f"Failed to save cache: {e}")
 
     async def get_session(self):
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            self.session = aiohttp.ClientSession(timeout=CALLBACK_TIMEOUT)
         return self.session
 
     async def close(self):
@@ -140,10 +167,10 @@ class AIManager:
                     return data.get("response", "").strip()
                 else:
                     error_text = await response.text()
-                    print(f"Ollama API Error: {response.status} - {error_text}")
+                    logger.error(f"Ollama API Error: {response.status} - {error_text}")
                     return ""
         except Exception as e:
-            print(f"Ollama Connection Error: {e}")
+            logger.error(f"Ollama Connection Error: {e}")
             return ""
 
     async def _generate_with_gemini_cli(self, prompt):
@@ -172,7 +199,7 @@ class AIManager:
         except RateLimitError:
             raise
         except Exception as e:
-            print(f"Gemini Execution Error: {e}")
+            logger.error(f"Gemini Execution Error: {e}")
             return ""
 
     async def _generate_with_gemini_api(self, prompt):
@@ -211,7 +238,7 @@ class AIManager:
         except RateLimitError:
             raise
         except Exception as e:
-            print(f"Gemini API Connection Error: {e}")
+            logger.error(f"Gemini API Connection Error: {e}")
             return ""
 
     async def generate_response(self, prompt, retry_callback=None):
@@ -245,7 +272,7 @@ class AIManager:
             except RateLimitError as e:
                 if attempt < max_retries:
                     delay = base_delay * (2 ** attempt)
-                    print(f"Rate limit hit. Retrying in {delay}s... (Attempt {attempt+1}/{max_retries})")
+                    logger.warning(f"Rate limit hit. Retrying in {delay}s... (Attempt {attempt+1}/{max_retries})")
 
                     if retry_callback:
                         try:
@@ -255,16 +282,22 @@ class AIManager:
                             else:
                                 retry_callback()
                         except Exception as cb_e:
-                            print(f"Retry callback failed: {cb_e}")
+                            logger.warning(f"Retry callback failed: {cb_e}")
 
                     await asyncio.sleep(delay)
                 else:
-                    print(f"Rate limit exceeded after {max_retries} retries: {e}")
+                    logger.error(f"Rate limit exceeded after {max_retries} retries: {e}")
                     return ""
             except Exception as e:
-                print(f"Unexpected error during generation: {e}")
+                logger.error(f"Unexpected error during generation: {e}")
                 return ""
         return ""
+
+    def _truncate_response(self, text):
+        """截斷過長的 AI 回應，符合 Discord 訊息限制"""
+        if len(text) > MAX_RESPONSE_LENGTH:
+            return text[:MAX_RESPONSE_LENGTH - 3] + "..."
+        return text
 
     async def generate_role_template(self, player_count, existing_roles, retry_callback=None):
         """
@@ -311,10 +344,10 @@ class AIManager:
                     self._save_cache()
                     return roles
             if response_text: # Only print invalid if we actually got a response
-                print(f"Invalid generated roles: {roles}")
+                logger.warning(f"Invalid generated roles: {roles}")
             return []
         except Exception as e:
-            print(f"Role generation failed: {e}\nResponse: {response_text}")
+            logger.error(f"Role generation failed: {e}\nResponse: {response_text}")
             return []
 
     async def generate_narrative(self, event_type, context, language="zh-TW", retry_callback=None):
@@ -351,6 +384,7 @@ class AIManager:
         response = await self.generate_response(prompt, retry_callback=retry_callback)
 
         if response:
+            response = self._truncate_response(response)
             self.narrative_cache[cache_key] = response
             # Evict oldest if over limit
             if len(self.narrative_cache) > 100:
@@ -528,7 +562,8 @@ class AIManager:
 
 請開始你的發言（只輸出發言內容，不要輸出分析過程）：
 """
-        return await self.generate_response(prompt, retry_callback=retry_callback)
+        response = await self.generate_response(prompt, retry_callback=retry_callback)
+        return self._truncate_response(response)
 
 # Global instance
 ai_manager = AIManager()

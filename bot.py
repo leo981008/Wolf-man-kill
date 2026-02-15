@@ -1,13 +1,18 @@
 import os
 import asyncio
+import logging
+import uuid
 import discord
-from collections import deque
+from collections import Counter, deque
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from random import SystemRandom
 import random
 from ai_manager import ai_manager
+
+# 設定日誌
+logger = logging.getLogger(__name__)
 
 # 使用加密安全的隨機數產生器
 secure_random = SystemRandom()
@@ -86,7 +91,7 @@ bot = WerewolfBot()
 
 class AIPlayer:
     def __init__(self, name):
-        self.id = random.randint(100000, 999999)
+        self.id = uuid.uuid4().int >> 96  # 使用 UUID 避免 ID 碰撞
         self.name = name
         self.mention = f"**{name}**"
         self.bot = True
@@ -147,7 +152,7 @@ class GameState:
         self.witch_potions = {'antidote': True, 'poison': True}
         self.creator = None
 
-        self.speaking_queue = []
+        self.speaking_queue = deque()
         self.current_speaker = None
         self.speaking_active = False
         self.speech_history = []
@@ -172,13 +177,13 @@ def create_retry_callback(channel):
     async def callback():
         try:
             await channel.send("⚠️ AI 正在思考中 (連線重試)... 請稍候。")
-        except:
+        except Exception:
             pass
     return callback
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} 已上線！(Slash Commands Enabled)')
+    logger.info(f'{bot.user} 已上線！(Slash Commands Enabled)')
 
 @bot.event
 async def on_message(message):
@@ -218,7 +223,7 @@ async def announce_event(channel, game, event_type, system_msg):
             try:
                 await game.creator.send(host_msg)
                 sent = True
-            except: pass
+            except Exception: pass
 
         if not sent:
             await channel.send(f"*(無法私訊主持人，請直接宣讀)*\n{narrative}\n({system_msg})")
@@ -286,7 +291,7 @@ async def request_dm_input(player, prompt, valid_check, timeout=45):
                 if len(m.content) > 100:
                     return False
                 return valid_check(m.content)
-            except:
+            except Exception:
                 return False
 
         msg = await bot.wait_for('message', check=check, timeout=timeout)
@@ -315,7 +320,7 @@ async def perform_night(channel, game):
         try:
             pid = int(content)
             return pid in game.player_ids
-        except: return False
+        except Exception: return False
 
     # 統一獲取目標 ID 列表
     all_player_ids = list(game.player_ids.keys())
@@ -341,10 +346,10 @@ async def perform_night(channel, game):
             if resp and resp.lower() != 'no':
                 guard_protect = int(resp)
                 try: await guard.send(f"今晚守護了 {guard_protect} 號。")
-                except: pass
+                except Exception: pass
             else:
                 try: await guard.send("今晚不守護任何人。")
-                except: pass
+                except Exception: pass
         return guard_protect
 
     # 狼人
@@ -366,21 +371,20 @@ async def perform_night(channel, game):
             for res in results:
                 if res and res.lower() != 'no':
                     try: votes.append(int(res))
-                    except: pass
+                    except Exception: pass
 
             if votes:
-                from collections import Counter
                 counts = Counter(votes)
                 max_votes = counts.most_common(1)[0][1]
                 candidates = [k for k, v in counts.items() if v == max_votes]
                 wolf_kill = secure_random.choice(candidates)
                 for wolf in wolves:
                     try: await wolf.send(f"今晚狼隊鎖定目標：**{wolf_kill} 號**。")
-                    except: pass
+                    except Exception: pass
             else:
                  for wolf in wolves:
                     try: await wolf.send("今晚狼隊沒有達成目標 (或棄刀)。")
-                    except: pass
+                    except Exception: pass
         return wolf_kill
 
     # 女巫
@@ -409,13 +413,13 @@ async def perform_night(channel, game):
                     witch_save = True
                     use_antidote = True
                     try: await witch.send("已使用解藥。")
-                    except: pass
+                    except Exception: pass
                 else:
                     try: await witch.send("未使用解藥。")
-                    except: pass
+                    except Exception: pass
             else:
                  try: await witch.send(f"🔮 **女巫請睜眼。** {target_msg} (解藥已用完)")
-                 except: pass
+                 except Exception: pass
 
             if use_antidote:
                  async with game.lock:
@@ -435,11 +439,11 @@ async def perform_night(channel, game):
                         use_poison = True
                         poison_target_id = witch_poison
                         try: await witch.send(f"已對 {witch_poison} 號使用毒藥。")
-                        except: pass
-                    except: pass
+                        except Exception: pass
+                    except Exception: pass
                 else:
                     try: await witch.send("未使用毒藥。")
-                    except: pass
+                    except Exception: pass
 
             if use_poison:
                  async with game.lock:
@@ -465,10 +469,10 @@ async def perform_night(channel, game):
                 result = "狼人 (查殺)" if is_bad else "好人 (金水)"
 
                 try: await seer.send(f"{target_id} 號的身分是：**{result}**")
-                except: pass
+                except Exception: pass
             else:
                 try: await seer.send("今晚未查驗。")
-                except: pass
+                except Exception: pass
 
     # 並發執行 (Concurrent Execution)
     guard_task = asyncio.create_task(run_guard())
@@ -510,7 +514,7 @@ async def set_player_mute(member, mute=True):
     if not hasattr(member, 'voice') or not member.voice: return
     if member.voice.mute == mute: return
     try: await member.edit(mute=mute)
-    except: pass
+    except Exception: pass
 
 async def mute_all_players(channel, game):
     players_to_mute = []
@@ -581,7 +585,7 @@ async def perform_ai_voting(channel, game):
 
     for res in results:
         if isinstance(res, Exception):
-            print(f"Error in AI voting task: {res}")
+            logger.error(f"Error in AI voting task: {res}")
 
 async def start_next_turn(channel, game):
     next_player = None
@@ -637,10 +641,12 @@ async def start_next_turn(channel, game):
         await set_player_mute(next_player, True)
         await start_next_turn(channel, game)
 
-async def perform_day(channel, game, dead_players=[]):
+async def perform_day(channel, game, dead_players=None):
+    if dead_players is None:
+        dead_players = []
     try:
         await channel.set_permissions(channel.guild.default_role, send_messages=True)
-    except: pass
+    except Exception: pass
 
     msg = "🌞 **天亮了！** 請開始討論。\n"
     game_over = False
@@ -910,14 +916,14 @@ async def start(interaction: discord.Interaction):
             description = ROLE_DESCRIPTIONS.get(role, "暫無說明")
             msg = f"您的編號是：**{pid}**\n您的身分是：**{role}**\n\n**功能說明：**\n{description}"
             await player.send(msg)
-        except:
+        except Exception:
             if not hasattr(player, 'bot') or not player.bot:
                 await interaction.channel.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
 
     summary_msg = f"**本局板子：{template_name}**\n**本局身分列表：**\n" + "\n".join(role_summary)
     for god in game.gods:
         try: await god.send(summary_msg)
-        except: pass
+        except Exception: pass
 
     await announce_event(interaction.channel, game, "遊戲開始", f"使用板子：{template_name}")
     await interaction.channel.send("(資料來源: [狼人殺百科](https://lrs.fandom.com/zh/wiki/局式), CC-BY-SA)")
@@ -940,6 +946,11 @@ async def night(interaction: discord.Interaction):
 @bot.tree.command(name="die", description="天神處決玩家")
 async def die(interaction: discord.Interaction, target: str):
     game = get_game(interaction.guild_id)
+
+    if not game.game_active:
+        await interaction.response.send_message("遊戲尚未開始。", ephemeral=True)
+        return
+
     is_admin = interaction.user.guild_permissions.administrator
     is_creator = (game.creator == interaction.user)
 
@@ -997,6 +1008,11 @@ async def done(interaction: discord.Interaction):
 
 @bot.tree.command(name="vote", description="投票")
 async def vote(interaction: discord.Interaction, target_id: str):
+    # 輸入長度驗證
+    if len(target_id) > 10:
+        await interaction.response.send_message("輸入過長，請輸入有效的玩家編號。", ephemeral=True)
+        return
+
     game = get_game(interaction.guild_id)
 
     if not game.game_active:
@@ -1060,12 +1076,16 @@ async def reset(interaction: discord.Interaction):
         game.reset()
 
     try: await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=True)
-    except: pass
+    except Exception: pass
 
     await interaction.response.send_message("遊戲已重置。")
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+    )
     if TOKEN:
         bot.run(TOKEN)
     else:
-        print("錯誤: 未找到 DISCORD_TOKEN")
+        logger.error("錯誤: 未找到 DISCORD_TOKEN")
