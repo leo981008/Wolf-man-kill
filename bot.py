@@ -1,7 +1,6 @@
 import os
 import asyncio
 import logging
-import uuid
 import discord
 from collections import Counter, deque
 from discord import app_commands
@@ -9,9 +8,28 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from random import SystemRandom
 import random
+from typing import Optional, List, Dict, Union, Any, Callable
+
+# Modules
 from ai_manager import ai_manager
+from game_data import (
+    GAME_TEMPLATES, 
+    ROLE_DESCRIPTIONS, 
+    WOLF_FACTION, 
+    GOD_FACTION, 
+    VILLAGER_FACTION
+)
+from game_objects import (
+    GameState, 
+    AIPlayer, 
+    get_game
+)
 
 # 設定日誌
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # 使用加密安全的隨機數產生器
@@ -20,54 +38,6 @@ secure_random = SystemRandom()
 # 載入環境變數
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-
-# 遊戲板子配置 (從 Wiki 獲取)
-GAME_TEMPLATES = {
-    6: [
-        {"name": "明牌局", "roles": ["狼人", "狼人", "預言家", "獵人", "平民", "平民"]},
-        {"name": "暗牌局", "roles": ["狼人", "狼人", "預言家", "守衛", "平民", "平民"]}
-    ],
-    7: [
-        {"name": "生還者", "roles": ["狼人", "白狼王", "預言家", "女巫", "獵人", "守衛", "平民"]}
-    ],
-    8: [
-        {"name": "諸神黃昏", "roles": ["狼王", "白狼王", "惡靈騎士", "預言家", "女巫", "獵人", "守衛", "白痴"]},
-        {"name": "末日狂徒", "roles": ["狼人", "狼人", "狼人", "預言家", "守衛", "騎士", "平民", "平民"]}
-    ],
-    9: [
-        {"name": "暗牌局", "roles": ["狼人", "狼人", "狼人", "預言家", "女巫", "獵人", "平民", "平民", "平民"]}
-    ],
-    10: [
-        {"name": "普通局", "roles": ["狼人", "狼人", "狼人", "預言家", "女巫", "獵人", "平民", "平民", "平民", "平民"]},
-        {"name": "白痴局", "roles": ["狼人", "狼人", "狼人", "預言家", "女巫", "獵人", "白痴", "平民", "平民", "平民"]}
-    ],
-    12: [
-        {"name": "預女獵白 標準板", "roles": ["狼人", "狼人", "狼人", "狼人", "預言家", "女巫", "獵人", "白痴", "平民", "平民", "平民", "平民"]},
-        {"name": "狼王守衛", "roles": ["狼人", "狼人", "狼人", "狼王", "預言家", "女巫", "獵人", "守衛", "平民", "平民", "平民", "平民"]}
-    ]
-}
-
-# 角色功能說明
-ROLE_DESCRIPTIONS = {
-    "狼人": "每晚可以與隊友討論並殺死一名玩家。目標是殺死所有神職或所有村民（屠邊）。",
-    "預言家": "每晚可以查驗一名玩家的身分，知道他是好人還是狼人。",
-    "平民": "沒有特殊技能，白天需根據發言投票找出狼人。",
-    "獵人": "被狼人殺死或被投票出局時，可以開槍帶走一名玩家（被女巫毒死無法開槍）。",
-    "守衛": "每晚可以守護一名玩家，防止其被狼人殺害。不能連續兩晚守護同一人。",
-    "女巫": "擁有一瓶解藥和一瓶毒藥。解藥可救活被狼人殺害的玩家，毒藥可毒死一名玩家。兩瓶藥不能同一晚使用。",
-    "白痴": "被投票出局時可以翻牌亮身分免死，但之後失去投票權，只能發言。",
-    "狼王": "被殺死或投票出局時，可以發動技能帶走一名玩家（被毒死無法發動）。",
-    "白狼王": "白天發言階段可以選擇自爆，並帶走一名場上存活的玩家。",
-    "惡靈騎士": "擁有一次反傷技能。若被預言家查驗，預言家死亡；若被女巫毒殺，女巫死亡。",
-    "騎士": "白天發言階段可以翻牌決鬥一名玩家。若該玩家是狼人，則狼人死亡；若為好人，則騎士死亡。",
-    "隱狼": "被預言家查驗時顯示為好人。無狼刀，當其他狼人死光後獲得刀權（視板子規則而定）。",
-    "老流氓": "平民陣營，被狼人殺害不會死，被女巫毒殺或獵人帶走會死。勝利條件與平民相同。",
-}
-
-# 角色分類 (用於屠邊判定)
-WOLF_FACTION = {"狼人", "狼王", "白狼王", "惡靈騎士", "隱狼"}
-GOD_FACTION = {"預言家", "女巫", "獵人", "守衛", "白痴", "騎士"}
-VILLAGER_FACTION = {"平民", "老流氓"}
 
 # 設定 Intent (權限)
 intents = discord.Intents.default()
@@ -81,7 +51,7 @@ class WerewolfBot(commands.Bot):
     async def setup_hook(self):
         # 注意: 全域同步可能需要一小時才能生效。開發時建議同步到特定 Guild。
         await self.tree.sync()
-        print("Slash commands synced globally.")
+        logger.info("Slash commands synced globally.")
 
     async def close(self):
         await ai_manager.close()
@@ -89,88 +59,7 @@ class WerewolfBot(commands.Bot):
 
 bot = WerewolfBot()
 
-class AIPlayer:
-    def __init__(self, name):
-        self.id = uuid.uuid4().int >> 96  # 使用 UUID 避免 ID 碰撞
-        self.name = name
-        self.mention = f"**{name}**"
-        self.bot = True
-        self.discriminator = "0000"
-
-    async def send(self, content):
-        pass # AI logic handles input separately
-
-    async def edit(self, mute=False):
-        pass
-
-    def __str__(self):
-        return self.name
-
-    def __eq__(self, other):
-        return hasattr(other, 'id') and self.id == other.id
-
-    def __hash__(self):
-        return hash(self.id)
-
-class GameState:
-    def __init__(self):
-        self.players = []
-        self.roles = {}
-        self.gods = []
-        self.votes = {}
-        self.voted_players = set()
-        self.game_active = False
-        self.player_ids = {}     # ID -> Member
-        self.player_id_map = {}  # Member -> ID
-        self.witch_potions = {'antidote': True, 'poison': True}
-        self.creator = None      # 房主 (用於權限控制)
-        self.lock = asyncio.Lock() # 並發控制鎖
-
-        # 發言階段狀態
-        self.speaking_queue = deque()
-        self.current_speaker = None
-        self.speaking_active = False
-
-        # 新增屬性
-        self.game_mode = "online" # "online" or "offline"
-        self.ai_players = []
-        self.speech_history = [] # 儲存本輪發言紀錄
-        self.role_to_players = {} # 角色 -> 玩家列表 (優化查找)
-        self.day_count = 0
-        self.last_dead_players = []
-
-    def reset(self):
-        self.players = []
-        self.roles = {}
-        self.role_to_players = {}
-        self.gods = []
-        self.votes = {}
-        self.voted_players = set()
-        self.game_active = False
-        self.player_ids = {}
-        self.player_id_map = {}
-        self.witch_potions = {'antidote': True, 'poison': True}
-        self.creator = None
-
-        self.speaking_queue = deque()
-        self.current_speaker = None
-        self.speaking_active = False
-        self.speech_history = []
-
-        self.game_mode = "online"
-        self.ai_players = []
-        self.day_count = 0
-        self.last_dead_players = []
-
-# Guild ID -> GameState
-games = {}
-
-def get_game(guild_id):
-    if guild_id not in games:
-        games[guild_id] = GameState()
-    return games[guild_id]
-
-def create_retry_callback(channel):
+def create_retry_callback(channel: discord.TextChannel) -> Callable:
     """
     Creates a callback function to notify users about rate limit retries.
     """
@@ -178,7 +67,7 @@ def create_retry_callback(channel):
         try:
             await channel.send("⚠️ AI 正在思考中 (連線重試)... 請稍候。")
         except Exception:
-            pass
+            pass # 無法發送訊息時忽略
     return callback
 
 @bot.event
@@ -186,7 +75,7 @@ async def on_ready():
     logger.info(f'{bot.user} 已上線！(Slash Commands Enabled)')
 
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
@@ -207,10 +96,10 @@ async def on_message(message):
                      msg_content = f"{message.author.name}: {message.content}"
                      game.speech_history.append(msg_content)
 
-    # 必須加上這行，否則 commands 框架會失效 (雖然本專案主要用 Slash Command，但為了相容性還是加上)
+    # 必須加上這行，否則 commands 框架會失效
     await bot.process_commands(message)
 
-async def announce_event(channel, game, event_type, system_msg):
+async def announce_event(channel: discord.TextChannel, game: GameState, event_type: str, system_msg: str):
     narrative = await ai_manager.generate_narrative(event_type, system_msg, retry_callback=create_retry_callback(channel))
 
     if game.game_mode == "online":
@@ -223,21 +112,22 @@ async def announce_event(channel, game, event_type, system_msg):
             try:
                 await game.creator.send(host_msg)
                 sent = True
-            except Exception: pass
+            except Exception as e: 
+                logger.warning(f"Failed to DM host: {e}")
 
         if not sent:
             await channel.send(f"*(無法私訊主持人，請直接宣讀)*\n{narrative}\n({system_msg})")
         else:
             await channel.send(f"*(已發送台詞給主持人 {game.creator.name})*")
 
-async def announce_last_words(channel, game, player, content):
+async def announce_last_words(channel: discord.TextChannel, game: GameState, player: Union[discord.Member, AIPlayer], content: str):
     """公佈遺言"""
     async with game.lock:
         game.speech_history.append(f"{player.name} (遺言): {content}")
     
     await channel.send(f"📢 **{player.name} 的遺言**：\n> {content}")
 
-async def check_game_over(channel, game):
+async def check_game_over(channel: discord.TextChannel, game: GameState):
     """檢查是否滿足獲勝條件 (需在 Lock 保護下呼叫)"""
     if not game.game_active:
         return
@@ -282,12 +172,13 @@ async def check_game_over(channel, game):
 
         try:
             await channel.set_permissions(channel.guild.default_role, send_messages=True)
-        except (discord.Forbidden, discord.HTTPException):
+        except (discord.Forbidden, discord.HTTPException) as e:
+             logger.error(f"Failed to reset permissions: {e}")
              await channel.send("警告：Bot 權限不足，無法自動恢復頻道發言權限。")
 
         await channel.send("請使用 `/reset` 重置遊戲以開始新的一局。")
 
-async def request_dm_input(player, prompt, valid_check, timeout=45):
+async def request_dm_input(player: Union[discord.Member, AIPlayer], prompt: str, valid_check: Callable[[str], bool], timeout: int = 45) -> Optional[str]:
     """私訊請求輸入的輔助函式"""
     try:
         await player.send(prompt)
@@ -305,10 +196,11 @@ async def request_dm_input(player, prompt, valid_check, timeout=45):
         return msg.content
     except (asyncio.TimeoutError, discord.Forbidden):
         return None
-    except discord.HTTPException:
+    except discord.HTTPException as e:
+        logger.error(f"HTTP Exception in DM request: {e}")
         return None
 
-async def perform_night(channel, game):
+async def perform_night(channel: discord.TextChannel, game: GameState):
     """執行天黑邏輯"""
     try:
         # Check current permissions before making API call
@@ -319,7 +211,8 @@ async def perform_night(channel, game):
         await announce_event(channel, game, "天黑", "夜晚行動開始，請留意私訊。")
     except discord.Forbidden:
         await channel.send("警告：Bot 權限不足 (Manage Channels)，無法執行天黑禁言。")
-    except discord.HTTPException:
+    except discord.HTTPException as e:
+        logger.error(f"Failed to set night permissions: {e}")
         await channel.send("錯誤：設定頻道權限時發生未知錯誤。")
 
     def is_valid_id(content):
@@ -351,9 +244,11 @@ async def perform_night(channel, game):
         if guard:
             resp = await get_action(guard, "守衛", "🛡️ **守衛請睜眼。** 今晚要守護誰？請輸入玩家編號 (輸入 no 空守):")
             if resp and resp.lower() != 'no':
-                guard_protect = int(resp)
-                try: await guard.send(f"今晚守護了 {guard_protect} 號。")
-                except Exception: pass
+                try:
+                    guard_protect = int(resp)
+                    try: await guard.send(f"今晚守護了 {guard_protect} 號。")
+                    except Exception: pass
+                except ValueError: pass
             else:
                 try: await guard.send("今晚不守護任何人。")
                 except Exception: pass
@@ -467,16 +362,20 @@ async def perform_night(channel, game):
         if seer:
             resp = await get_action(seer, "預言家", "🔮 **預言家請睜眼。** 今晚要查驗誰？請輸入玩家編號:")
             if resp and resp.strip().lower() != 'no':
-                target_id = int(resp)
-                async with game.lock:
-                    target_obj = game.player_ids.get(target_id)
-                    target_role = game.roles.get(target_obj, "未知") if target_obj else "未知"
+                try:
+                    target_id = int(resp)
+                    async with game.lock:
+                        target_obj = game.player_ids.get(target_id)
+                        target_role = game.roles.get(target_obj, "未知") if target_obj else "未知"
 
-                is_bad = "狼" in target_role and target_role != "隱狼"
-                result = "狼人 (查殺)" if is_bad else "好人 (金水)"
+                    is_bad = "狼" in target_role and target_role != "隱狼"
+                    result = "狼人 (查殺)" if is_bad else "好人 (金水)"
 
-                try: await seer.send(f"{target_id} 號的身分是：**{result}**")
-                except Exception: pass
+                    try: await seer.send(f"{target_id} 號的身分是：**{result}**")
+                    except Exception: pass
+                except ValueError:
+                    try: await seer.send("無效的編號。")
+                    except Exception: pass
             else:
                 try: await seer.send("今晚未查驗。")
                 except Exception: pass
@@ -517,27 +416,27 @@ async def perform_night(channel, game):
 
     await perform_day(channel, game, dead_players_list, poison_victim_id=witch_poison)
 
-async def set_player_mute(member, mute=True):
+async def set_player_mute(member: Union[discord.Member, AIPlayer], mute: bool = True):
     if not hasattr(member, 'voice') or not member.voice: return
     if member.voice.mute == mute: return
     try: await member.edit(mute=mute)
     except Exception: pass
 
-async def mute_all_players(channel, game):
+async def mute_all_players(channel: discord.TextChannel, game: GameState):
     players_to_mute = []
     async with game.lock:
         players_to_mute = list(game.players)
     tasks = [set_player_mute(p, True) for p in players_to_mute]
     await asyncio.gather(*tasks)
 
-async def unmute_all_players(channel, game):
+async def unmute_all_players(channel: discord.TextChannel, game: GameState):
     players_to_unmute = []
     async with game.lock:
         players_to_unmute = list(game.players)
     tasks = [set_player_mute(p, False) for p in players_to_unmute]
     await asyncio.gather(*tasks)
 
-async def perform_ai_voting(channel, game):
+async def perform_ai_voting(channel: discord.TextChannel, game: GameState):
     await asyncio.sleep(5)
 
     ai_voters = []
@@ -594,7 +493,7 @@ async def perform_ai_voting(channel, game):
         if isinstance(res, Exception):
             logger.error(f"Error in AI voting task: {res}")
 
-async def start_next_turn(channel, game):
+async def start_next_turn(channel: discord.TextChannel, game: GameState):
     next_player = None
     remaining_count = 0
 
@@ -648,7 +547,7 @@ async def start_next_turn(channel, game):
         await set_player_mute(next_player, True)
         await start_next_turn(channel, game)
 
-async def handle_death_rattle(channel, game, dead_players, poison_victim_id=None):
+async def handle_death_rattle(channel: discord.TextChannel, game: GameState, dead_players: List[Union[discord.Member, AIPlayer]], poison_victim_id: Optional[int] = None) -> List[Union[discord.Member, AIPlayer]]:
     """處理死亡玩家的技能 (如獵人開槍)"""
     new_dead_players = []
     
@@ -716,7 +615,7 @@ async def handle_death_rattle(channel, game, dead_players, poison_victim_id=None
         
     return new_dead_players
 
-async def perform_day(channel, game, dead_players=None, poison_victim_id=None):
+async def perform_day(channel: discord.TextChannel, game: GameState, dead_players: Optional[List[Union[discord.Member, AIPlayer]]] = None, poison_victim_id: Optional[int] = None):
     if dead_players is None:
         dead_players = []
     try:
@@ -765,9 +664,7 @@ async def perform_day(channel, game, dead_players=None, poison_victim_id=None):
         await mute_all_players(channel, game)
         await start_next_turn(channel, game)
 
-    
-
-async def request_last_words(channel, game, player):
+async def request_last_words(channel: discord.TextChannel, game: GameState, player: Union[discord.Member, AIPlayer]):
     """請求玩家發表遺言"""
     try:
         await channel.send(f"🎤 **請 {player.mention} 發表遺言。** (限時 60 秒)")
@@ -809,7 +706,7 @@ async def request_last_words(channel, game, player):
         logger.error(f"Error in request_last_words: {e}")
         await channel.send("(遺言環節發生錯誤，跳過)")
 
-async def resolve_votes(channel, game):
+async def resolve_votes(channel: discord.TextChannel, game: GameState):
     async with game.lock:
         if not game.votes:
             await channel.send("所有人均投廢票 (Abstain)，無人死亡。")
@@ -1055,8 +952,9 @@ async def start(interaction: discord.Interaction):
             description = ROLE_DESCRIPTIONS.get(role, "暫無說明")
             msg = f"您的編號是：**{pid}**\n您的身分是：**{role}**\n\n**功能說明：**\n{description}"
             await player.send(msg)
-        except Exception:
+        except Exception as e:
             if not hasattr(player, 'bot') or not player.bot:
+                logger.warning(f"Failed to DM {player.name}: {e}")
                 await interaction.channel.send(f"無法發送私訊給 {player.mention}，請檢查隱私設定。")
 
     summary_msg = f"**本局板子：{template_name}**\n**本局身分列表：**\n" + "\n".join(role_summary)
@@ -1101,9 +999,7 @@ async def die(interaction: discord.Interaction, target: str):
     if target.isdigit():
         target_member = game.player_ids.get(int(target))
     # Slash command target usually Member, but keeping str for ID support
-    # If we used discord.Member type hint, we'd get a member object directly.
-    # But current logic supports IDs. Let's keep it flexible or use Member converter manually.
-
+    
     if not target_member:
         await interaction.response.send_message(f"找不到玩家 ID {target}", ephemeral=True)
         return
@@ -1220,10 +1116,6 @@ async def reset(interaction: discord.Interaction):
     await interaction.response.send_message("遊戲已重置。")
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
-    )
     if TOKEN:
         bot.run(TOKEN)
     else:

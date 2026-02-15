@@ -9,6 +9,8 @@ import re
 import aiohttp
 import time
 from collections import OrderedDict
+from typing import Optional, List, Dict, Any, Union, Tuple, Callable
+
 from ai_strategies import ROLE_STRATEGIES
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ class RateLimiter:
     """
     Token Bucket implementation for rate limiting.
     """
-    def __init__(self, rate, capacity):
+    def __init__(self, rate: float, capacity: float):
         self.rate = rate  # Tokens per second
         self.capacity = capacity
         self.tokens = capacity
@@ -67,13 +69,13 @@ class RateLimiter:
             self.last_update = time.monotonic()
 
 class AIManager:
-    def __init__(self, ollama_model=None):
+    def __init__(self, ollama_model: Optional[str] = None):
         self.provider = os.getenv('AI_PROVIDER', 'gemini').lower()
         self.ollama_model = ollama_model or os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
         self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
         self.gemini_api_key = os.getenv('GEMINI_API_KEY')
         self.gemini_model = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-lite')
-        self.session = None
+        self.session: Optional[aiohttp.ClientSession] = None
 
         logger.info(f"AI Manager initialized. Provider: {self.provider}")
         if self.provider == 'ollama':
@@ -89,8 +91,8 @@ class AIManager:
         # Capacity 1 ensures strict spacing.
         self.rate_limiter = RateLimiter(rate=15/60.0, capacity=1.0)
 
-        self.narrative_cache = OrderedDict()
-        self.role_template_cache = OrderedDict()
+        self.narrative_cache: OrderedDict = OrderedDict()
+        self.role_template_cache: OrderedDict = OrderedDict()
         self._load_cache()
 
     def _load_cache(self):
@@ -144,7 +146,7 @@ class AIManager:
         except Exception as e:
             logger.error(f"Failed to save cache: {e}")
 
-    async def get_session(self):
+    async def get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession(timeout=CALLBACK_TIMEOUT)
         return self.session
@@ -153,7 +155,7 @@ class AIManager:
         if self.session and not self.session.closed:
             await self.session.close()
 
-    async def _generate_with_ollama(self, prompt):
+    async def _generate_with_ollama(self, prompt: str) -> str:
         url = f"{self.ollama_host}/api/generate"
         payload = {
             "model": self.ollama_model,
@@ -174,7 +176,7 @@ class AIManager:
                     raise aiohttp.ClientError(f"Ollama Server Error: {response.status}")
                 return ""
 
-    async def _generate_with_gemini_cli(self, prompt):
+    async def _generate_with_gemini_cli(self, prompt: str) -> str:
         """Executes gemini-cli via subprocess."""
         try:
             # Create subprocess: gemini -p "prompt"
@@ -195,7 +197,7 @@ class AIManager:
                 if "429" in error_msg or "ResourceExhausted" in error_msg:
                     raise RateLimitError(f"Gemini CLI 429: {error_msg}")
 
-                print(f"Gemini CLI Error: {error_msg}")
+                logger.error(f"Gemini CLI Error: {error_msg}")
                 return ""
         except RateLimitError:
             raise
@@ -203,10 +205,10 @@ class AIManager:
             logger.error(f"Gemini Execution Error: {e}")
             return ""
 
-    async def _generate_with_gemini_api(self, prompt):
+    async def _generate_with_gemini_api(self, prompt: str) -> str:
         """Executes Gemini via Google API."""
         if not self.gemini_api_key:
-            print("Gemini API Key is missing.")
+            logger.error("Gemini API Key is missing.")
             return ""
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent"
@@ -234,7 +236,7 @@ class AIManager:
                     raise RateLimitError(f"Gemini API 429: {error_text}")
                 else:
                     error_text = await response.text()
-                    print(f"Gemini API Error: {response.status} - {error_text}")
+                    logger.error(f"Gemini API Error: {response.status} - {error_text}")
                     return ""
         except RateLimitError:
             raise
@@ -242,7 +244,7 @@ class AIManager:
             logger.error(f"Gemini API Connection Error: {e}")
             return ""
 
-    async def generate_response(self, prompt, retry_callback=None):
+    async def generate_response(self, prompt: str, retry_callback: Optional[Callable] = None) -> str:
         """
         Generic async wrapper for generating content with Rate Limiting and Retry logic.
         """
@@ -255,7 +257,7 @@ class AIManager:
             elif self.provider == 'gemini-cli' or self.provider == 'gemini':
                 return await self._generate_with_gemini_cli(prompt)
             else:
-                print(f"Unknown provider: {self.provider}, defaulting to Gemini CLI")
+                logger.warning(f"Unknown provider: {self.provider}, defaulting to Gemini CLI")
                 return await self._generate_with_gemini_cli(prompt)
 
         # Retry logic with Rate Limiting
@@ -290,19 +292,17 @@ class AIManager:
                     logger.error(f"Operation failed after {max_retries} retries: {e}")
                     return ""
             except Exception as e:
-                logger.error(f"Unexpected error during generation: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
+                logger.error(f"Unexpected error during generation: {e}", exc_info=True)
                 return ""
         return ""
 
-    def _truncate_response(self, text):
+    def _truncate_response(self, text: str) -> str:
         """截斷過長的 AI 回應，符合 Discord 訊息限制"""
         if len(text) > MAX_RESPONSE_LENGTH:
             return text[:MAX_RESPONSE_LENGTH - 3] + "..."
         return text
 
-    async def generate_role_template(self, player_count, existing_roles, retry_callback=None):
+    async def generate_role_template(self, player_count: int, existing_roles: List[str], retry_callback: Optional[Callable] = None) -> List[str]:
         """
         Generates a balanced role list for a given player count.
         """
@@ -347,13 +347,13 @@ class AIManager:
                     self._save_cache()
                     return roles
             if response_text: # Only print invalid if we actually got a response
-                logger.warning(f"Invalid generated roles: {roles}")
+                logger.warning(f"Invalid generated roles for {player_count} players: {roles}")
             return []
         except Exception as e:
             logger.error(f"Role generation failed: {e}\nResponse: {response_text}")
             return []
 
-    async def generate_narrative(self, event_type, context, language="zh-TW", retry_callback=None):
+    async def generate_narrative(self, event_type: str, context: str, language: str = "zh-TW", retry_callback: Optional[Callable] = None) -> str:
         """
         Generates flavor text for game events.
         """
@@ -395,7 +395,7 @@ class AIManager:
 
         return response
 
-    async def get_ai_action(self, role, game_context, valid_targets, speech_history=None, retry_callback=None):
+    async def get_ai_action(self, role: str, game_context: str, valid_targets: List[str], speech_history: Optional[List[str]] = None, retry_callback: Optional[Callable] = None) -> str:
         """
         Decides an action for an AI player.
         """
@@ -449,7 +449,7 @@ class AIManager:
             return match.group()
         return "no"
 
-    def _get_phase_name(self, game_context):
+    def _get_phase_name(self, game_context: str) -> str:
         """
         Determines the game phase (early/mid/late) from the game context string.
         """
@@ -464,7 +464,7 @@ class AIManager:
                 return "late"
         return "early"
 
-    async def get_ai_speech(self, player_id, role, game_context, speech_history=None, retry_callback=None):
+    async def get_ai_speech(self, player_id: int, role: str, game_context: str, speech_history: Optional[List[str]] = None, retry_callback: Optional[Callable] = None) -> str:
         """
         Generates a speech for an AI player.
         speech_history: List of strings (previous speeches in the round).
@@ -505,10 +505,10 @@ class AIManager:
 3. 你的目標是：符合你所屬陣營的最大利益，並引導局勢（或隱藏自己）。
 """
         else:
-            history_text = "\n".join(speech_history)
+            history_text = "\n".join(speech_history) if speech_history else ""
             scene_restriction = f"""
 # 當前場景限制
-在你之前已經有 {len(speech_history)} 位玩家發言了。
+在你之前已經有 {len(speech_history) if speech_history else 0} 位玩家發言了。
 以下是他們的發言紀錄：
 {history_text}
 """
@@ -568,7 +568,7 @@ class AIManager:
         response = await self.generate_response(prompt, retry_callback=retry_callback)
         return self._truncate_response(response)
 
-    async def get_ai_last_words(self, player_id, role, game_context, speech_history=None, retry_callback=None):
+    async def get_ai_last_words(self, player_id: str, role: str, game_context: str, speech_history: Optional[List[str]] = None, retry_callback: Optional[Callable] = None) -> str:
         """
         Generates a last words message for an AI player who has just been voted out.
         """
