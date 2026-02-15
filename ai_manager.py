@@ -11,6 +11,7 @@ from ai_strategies import ROLE_STRATEGIES
 load_dotenv()
 
 DIGIT_PATTERN = re.compile(r'\d+')
+DAY_PATTERN = re.compile(r'第\s*(\d+)\s*天')
 
 CACHE_FILE = "ai_cache.json"
 
@@ -415,7 +416,7 @@ class AIManager:
         """
         Determines the game phase (early/mid/late) from the game context string.
         """
-        day_match = re.search(r'第\s*(\d+)\s*天', game_context)
+        day_match = DAY_PATTERN.search(game_context)
         if day_match:
             day = int(day_match.group(1))
             if day <= 2:
