@@ -8,11 +8,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bot
 from bot import AIPlayer
+import game_objects
 
 class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         # Reset games
         bot.games = {}
+        game_objects.games.clear()
 
     async def test_god_and_join_switching(self):
         interaction = MagicMock()
@@ -65,7 +67,8 @@ class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(found)
 
     @patch('bot.perform_night', new_callable=AsyncMock)
-    async def test_start_preserves_gods(self, mock_night):
+    async def test_start_host_not_player_becomes_god(self, mock_night):
+        """Host 不在玩家列表中，應自動成為天神"""
         interaction = MagicMock()
         interaction.guild_id = 1001
         interaction.user = MagicMock()
@@ -78,7 +81,7 @@ class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
 
         game = bot.get_game(interaction.guild_id)
 
-        # Setup: 1 God, 3 Players (Host is God)
+        # Setup: 1 God, 3 Players (Host is NOT a player)
         god_user = MagicMock()
         god_user.name = "GodUser"
         god_user.send = AsyncMock()
@@ -91,11 +94,39 @@ class TestBotFeatures(unittest.IsolatedAsyncioTestCase):
         p3 = MagicMock(); p3.name="P3"; p3.send=AsyncMock()
         game.players = [p1, p2, p3]
 
-        # Host runs start.
+        # Host runs start (Host is not a player).
         await bot.start.callback(interaction)
 
         self.assertIn(god_user, game.gods)
-        self.assertIn(interaction.user, game.gods) # Host added
+        self.assertIn(interaction.user, game.gods)  # Host auto-added to gods
+        self.assertNotIn(interaction.user, game.players)
+        self.assertTrue(game.game_active)
+
+    @patch('bot.perform_night', new_callable=AsyncMock)
+    async def test_start_host_is_player_stays_player(self, mock_night):
+        """Host 已在玩家列表中，不應被強制轉為天神"""
+        interaction = MagicMock()
+        interaction.guild_id = 1001
+        interaction.user = MagicMock()
+        interaction.user.name = "Host"
+        interaction.response.send_message = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        interaction.channel.send = AsyncMock()
+        interaction.user.send = AsyncMock()
+        interaction.guild.default_role = MagicMock()
+
+        game = bot.get_game(interaction.guild_id)
+
+        # Add 3 players including Host
+        p1 = MagicMock(); p1.name="P1"; p1.send=AsyncMock()
+        p2 = MagicMock(); p2.name="P2"; p2.send=AsyncMock()
+        game.players = [interaction.user, p1, p2]
+
+        # Host runs start (Host IS a player).
+        await bot.start.callback(interaction)
+
+        self.assertIn(interaction.user, game.players)  # Host stays as player
+        self.assertNotIn(interaction.user, game.gods)  # Host NOT added to gods
         self.assertTrue(game.game_active)
 
     async def test_die_command(self):

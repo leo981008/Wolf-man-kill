@@ -850,12 +850,14 @@ async def start(interaction: discord.Interaction):
             await interaction.followup.send("遊戲已經在進行中。")
             return
 
-        if interaction.user in game.players:
-            game.players.remove(interaction.user)
-            await interaction.channel.send(f"{interaction.user.mention} 已轉為天神 (God)，不參與遊戲。")
+        # 開始遊戲的人不一定要是天神
+        # 只有在不是玩家的情況下，才自動加入天神組
+        if interaction.user not in game.players:
+            if interaction.user not in game.gods:
+                game.gods.append(interaction.user)
 
-        if interaction.user not in game.gods:
-            game.gods.append(interaction.user)
+        # 確保 creator 被設定 (用於權限控制)
+        game.creator = interaction.user
 
         current_player_count = len(game.players)
         if current_player_count < 3:
