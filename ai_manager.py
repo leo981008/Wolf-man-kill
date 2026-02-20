@@ -155,13 +155,16 @@ class AIManager:
         if self.session and not self.session.closed:
             await self.session.close()
 
-    async def _generate_with_ollama(self, prompt: str) -> str:
+    async def _generate_with_ollama(self, prompt: str, reasoning_effort: str = "medium") -> str:
         url = f"{self.ollama_host}/api/generate"
         payload = {
             "model": self.ollama_model,
             "prompt": prompt,
             "stream": False
         }
+        # 設定思考程度 (low/medium/high)
+        if reasoning_effort in ("low", "medium", "high"):
+            payload["options"] = {"reasoning_effort": reasoning_effort}
         # Let exceptions bubble up to generate_response for retry logic
         session = await self.get_session()
         async with session.post(url, json=payload) as response:
@@ -244,14 +247,14 @@ class AIManager:
             logger.error(f"Gemini API Connection Error: {e}")
             return ""
 
-    async def generate_response(self, prompt: str, retry_callback: Optional[Callable] = None) -> str:
+    async def generate_response(self, prompt: str, retry_callback: Optional[Callable] = None, reasoning_effort: str = "medium") -> str:
         """
         Generic async wrapper for generating content with Rate Limiting and Retry logic.
         """
         # Define the generation task based on provider
         async def task():
             if self.provider == 'ollama':
-                return await self._generate_with_ollama(prompt)
+                return await self._generate_with_ollama(prompt, reasoning_effort=reasoning_effort)
             elif self.provider == 'gemini-api':
                 return await self._generate_with_gemini_api(prompt)
             elif self.provider == 'gemini-cli' or self.provider == 'gemini':
@@ -326,7 +329,7 @@ class AIManager:
         - 回傳內容必須是純 JSON 陣列，不可包含任何解釋、說明或其他文字。
         """
 
-        response_text = await self.generate_response(prompt, retry_callback=retry_callback)
+        response_text = await self.generate_response(prompt, retry_callback=retry_callback, reasoning_effort="low")
         try:
             clean_text = response_text.replace("```json", "").replace("```", "").strip()
             # Try to find JSON array if extra text exists
@@ -384,7 +387,7 @@ class AIManager:
         事件類型：{event_type}
         詳細資訊：{context}
         """
-        response = await self.generate_response(prompt, retry_callback=retry_callback)
+        response = await self.generate_response(prompt, retry_callback=retry_callback, reasoning_effort="low")
 
         if response:
             response = self._truncate_response(response)
@@ -438,7 +441,7 @@ class AIManager:
 如果你決定不行動、空守或棄票，請回傳 'no'。
 只回傳結果，不要解釋。
 """
-        response = await self.generate_response(prompt, retry_callback=retry_callback)
+        response = await self.generate_response(prompt, retry_callback=retry_callback, reasoning_effort="high")
         clean = response.strip().lower().replace(".", "")
 
         if "no" in clean:
@@ -565,7 +568,7 @@ class AIManager:
 
 請開始你的發言（只輸出發言內容，不要輸出分析過程）：
 """
-        response = await self.generate_response(prompt, retry_callback=retry_callback)
+        response = await self.generate_response(prompt, retry_callback=retry_callback, reasoning_effort="high")
         return self._truncate_response(response)
 
     async def get_ai_last_words(self, player_id: str, role: str, game_context: str, speech_history: Optional[List[str]] = None, retry_callback: Optional[Callable] = None) -> str:
@@ -603,7 +606,7 @@ class AIManager:
 
 請直接輸出遺言內容：
 """
-        response = await self.generate_response(prompt, retry_callback=retry_callback)
+        response = await self.generate_response(prompt, retry_callback=retry_callback, reasoning_effort="high")
         return self._truncate_response(response)
 
 # Global instance
