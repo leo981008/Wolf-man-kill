@@ -14,18 +14,12 @@ mock_discord = MagicMock()
 sys.modules['discord'] = mock_discord
 sys.modules['discord.ext'] = MagicMock()
 sys.modules['discord.app_commands'] = MagicMock()
-sys.modules['dotenv'] = MagicMock()
 sys.modules['google'] = MagicMock()
-sys.modules['google.generativeai'] = MagicMock()
 
-# Mock aiohttp
-mock_aiohttp = MagicMock()
-mock_aiohttp.ClientTimeout = MagicMock()
-mock_aiohttp.ClientError = Exception
-sys.modules['aiohttp'] = mock_aiohttp
 
-# 強制將 AI 提供者設定為 Ollama
-os.environ['AI_PROVIDER'] = 'ollama'
+# 強制將 AI 提供者設定移除以尊重 .env
+from dotenv import load_dotenv
+load_dotenv()
 
 # 匯入需要進行 Benchmark 的模組
 from ai_manager import AIManager, RateLimiter, _load_and_process_cache, _write_cache_to_disk, DIGIT_PATTERN, DAY_PATTERN, JSON_ARRAY_PATTERN, JSON_OBJECT_PATTERN

@@ -889,16 +889,16 @@ async def main():
     parser.add_argument("--quiet", action="store_true", help="安靜模式 (只顯示最終報告)")
     args = parser.parse_args()
 
-    model_name = args.model or os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
-
+    ai = AIManager(ollama_model=args.model)
+    actual_model = ai.ollama_model if ai.provider == "ollama" else ai.litellm_model if ai.provider == "litellm" else ai.gemini_model 
+    
     print(f"\n{C.BOLD}{C.CYAN}{'═'*60}{C.RESET}")
     print(f"{C.BOLD}{C.CYAN}  🧠 AI 智商測試程式 — 狼人殺 AI IQ Benchmark{C.RESET}")
     print(f"{C.BOLD}{C.CYAN}{'═'*60}{C.RESET}")
-    print(f"  模型: {model_name}")
+    print(f"  提供者: {ai.provider}")
+    print(f"  模型: {actual_model}")
     print(f"  模擬局數: {args.games}")
     print(f"  配置: 9人局 (3狼 + 預女獵 + 3平民)\n")
-
-    ai = AIManager(ollama_model=args.model)
 
     # 連線檢查
     if ai.provider == 'ollama':
