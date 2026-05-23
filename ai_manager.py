@@ -561,7 +561,15 @@ class AIManager:
 
         match = DIGIT_PATTERN.search(clean)
         if match:
-            return match.group()
+            target_val = match.group()
+            if valid_targets:
+                valid_set = {str(t) for t in valid_targets}
+                if target_val in valid_set:
+                    return target_val
+                else:
+                    logger.warning(f"AI returned invalid target {target_val} (not in {valid_targets}) for role {role}. Falling back to 'no'.")
+                    return "no"
+            return target_val
         return "no"
 
 
@@ -624,6 +632,7 @@ class AIManager:
                 json_str = json_match.group()
                 import json
                 parsed_json = json.loads(json_str)
+                valid_set = {str(t) for t in valid_targets} if valid_targets else set()
                 for name, target in parsed_json.items():
                     target_str = str(target).strip().lower().replace(".", "")
                     if "no" in target_str:
@@ -631,7 +640,12 @@ class AIManager:
                     else:
                         match = DIGIT_PATTERN.search(target_str)
                         if match:
-                            results[name] = match.group()
+                            target_val = match.group()
+                            if valid_targets and target_val not in valid_set:
+                                logger.warning(f"AI batch returned invalid target {target_val} for player {name} (not in {valid_targets}). Falling back to 'no'.")
+                                results[name] = "no"
+                            else:
+                                results[name] = target_val
                         else:
                             results[name] = "no"
             else:

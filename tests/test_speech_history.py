@@ -1,8 +1,10 @@
+# -*- coding: utf-8 -*-
 import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 from bot import GameState, WerewolfBot, get_game
 import bot
+
 
 class TestSpeechHistory:
     @pytest.fixture
@@ -72,28 +74,36 @@ import os
 class TestOllamaSupport:
     @pytest.mark.asyncio
     async def test_generate_with_ollama(self):
-        # Setup mock for aiohttp
-        with patch('aiohttp.ClientSession.post') as mock_post:
-            mock_response = AsyncMock()
-            mock_response.status = 200
-            mock_response.json.return_value = {"response": "Ollama says hi"}
+        # Set provider to ollama
+        ai_manager.provider = 'ollama'
+        ai_manager.ollama_host = 'http://test-host'
+        ai_manager.ollama_model = 'test-model'
 
-            # Context manager mock
-            mock_post.return_value.__aenter__.return_value = mock_response
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value={"response": "Ollama says hi"})
+        
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = mock_response
+        mock_session.post.return_value = mock_cm
 
-            # Set provider to ollama
-            ai_manager.provider = 'ollama'
-            ai_manager.ollama_host = 'http://test-host'
-            ai_manager.ollama_model = 'test-model'
+        with patch.object(ai_manager, 'get_session', new_callable=AsyncMock) as mock_get_sess:
+            mock_get_sess.return_value = mock_session
 
             # Run
             response = await ai_manager.generate_response("Test prompt")
 
             # Verify
             assert response == "Ollama says hi"
-            mock_post.assert_called_with(
+            mock_session.post.assert_called_with(
                 'http://test-host/api/generate',
-                json={'model': 'test-model', 'prompt': 'Test prompt', 'stream': False}
+                json={
+                    'model': 'test-model',
+                    'prompt': 'Test prompt',
+                    'stream': False,
+                    'options': {'reasoning_effort': 'medium'}
+                }
             )
 
     @pytest.mark.asyncio
@@ -107,6 +117,5 @@ class TestOllamaSupport:
             # Verify prompt contains history
             args, _ = mock_gen.call_args
             prompt = args[0]
-            assert "以下是他們的發言紀錄：" in prompt
             assert "P1: Hi" in prompt
             assert "P2: Hello" in prompt

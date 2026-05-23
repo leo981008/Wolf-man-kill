@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ai_strategies.py
 # 本檔案定義了 AI 玩家在遊戲中的角色扮演指南與策略邏輯。
 

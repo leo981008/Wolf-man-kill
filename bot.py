@@ -329,8 +329,8 @@ async def perform_night(channel: discord.TextChannel, game: GameState):
         return is_valid_id(content, game.player_ids)
 
     # 統一獲取目標 ID 列表與歷史紀錄 (減少鎖的持有時間)
-    all_player_ids = list(game.player_ids.keys())
     async with game.lock:
+        all_player_ids = [pid for pid, p in game.player_ids.items() if p in game.players]
         shared_history = list(game.speech_history)
 
     # 輔助：獲取行動 (自動判斷 AI 或真人)
@@ -602,7 +602,7 @@ async def perform_ai_voting(channel: discord.TextChannel, game: GameState):
         if not game.game_active or game.speaking_active: return
         # 篩選出還沒投票的存活 AI 玩家
         ai_voters = [p for p in game.ai_players if p in game.players and p not in game.voted_players]
-        all_targets = list(game.player_ids.keys())
+        all_targets = [pid for pid, p in game.player_ids.items() if p in game.players]
         shared_history = list(game.speech_history)
         ai_roles = {p: game.roles.get(p, "平民") for p in ai_voters}
 
@@ -789,7 +789,7 @@ async def handle_death_rattle(channel: discord.TextChannel, game: GameState, dea
                          alive_count = len(game.players)
                          async with game.lock:
                              shared_history = list(game.speech_history)
-                             all_ids = list(game.player_ids.keys())
+                             all_ids = [pid for pid, p in game.player_ids.items() if p in game.players]
                              
                          target_id = await ai_manager.get_ai_action("獵人", f"你已死亡。請選擇射擊目標。場上存活: {alive_count}", all_ids, speech_history=shared_history, retry_callback=create_retry_callback(channel))
                     else:
@@ -1085,6 +1085,8 @@ async def start(interaction: discord.Interaction):
             return
 
         game.creator = interaction.user
+        if interaction.user not in game.players and interaction.user not in game.gods:
+            game.gods.append(interaction.user)
 
         current_player_count = len(game.players)
         if current_player_count < 3:

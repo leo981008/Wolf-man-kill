@@ -4,11 +4,14 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # Mock dependencies before importing ai_manager
-sys.modules['dotenv'] = MagicMock()
-sys.modules['aiohttp'] = MagicMock()
-sys.modules['ai_strategies'] = MagicMock()
-# Mock strategies dict
-sys.modules['ai_strategies'].ROLE_STRATEGIES = {}
+try:
+    import dotenv
+except ImportError:
+    sys.modules['dotenv'] = MagicMock()
+try:
+    import aiohttp
+except ImportError:
+    sys.modules['aiohttp'] = MagicMock()
 
 import asyncio
 import os

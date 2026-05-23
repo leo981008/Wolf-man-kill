@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from ai_manager import AIManager
@@ -14,8 +15,9 @@ async def test_speech_prompt_integration():
     with patch.object(test_ai, 'generate_response', new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = "Mocked Speech"
 
+        print("STRATEGIES KEYS IN PYTEST:", list(ROLE_STRATEGIES.keys()))
         # Test Case 1: Seer (預言家)
-        role = "預言家"
+        role = list(ROLE_STRATEGIES.keys())[2]
         strategy = ROLE_STRATEGIES[role]
         await test_ai.get_ai_speech(1, role, "現在是第 1 天白天。存活玩家: 8 人。")
 
@@ -28,7 +30,7 @@ async def test_speech_prompt_integration():
         assert strategy['speech_guide'] in call_args
 
         # Test Case 2: Werewolf (狼人)
-        role = "狼人"
+        role = list(ROLE_STRATEGIES.keys())[1]
         strategy = ROLE_STRATEGIES[role]
         await test_ai.get_ai_speech(2, role, "現在是第 1 天白天。存活玩家: 8 人。")
 
@@ -47,7 +49,7 @@ async def test_action_prompt_integration():
     with patch.object(test_ai, 'generate_response', new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = "1"
 
-        role = "女巫"
+        role = list(ROLE_STRATEGIES.keys())[3]
         strategy = ROLE_STRATEGIES[role]
 
         await test_ai.get_ai_action(role, "夜晚行動。場上存活 8 人。", [1, 2, 3])
