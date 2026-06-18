@@ -2,6 +2,7 @@ import os
 import discord
 from discord.ext import commands
 from discord import app_commands
+from discord.ui import View, Button, Select
 from dotenv import load_dotenv
 
 from src.game_models import GameState, Player, GamePhase
@@ -19,6 +20,73 @@ STANDARD_TEMPLATES = {
     10: {"狼人": 3, "預言家": 1, "女巫": 1, "獵人": 1, "守衛": 1, "平民": 3},
     12: {"狼人": 4, "預言家": 1, "女巫": 1, "獵人": 1, "守衛": 1, "平民": 4}
 }
+
+
+
+class ActionSelect(discord.ui.Select):
+    def __init__(self, options, placeholder, custom_id):
+        super().__init__(placeholder=placeholder, options=options, custom_id=custom_id)
+
+    async def callback(self, interaction: discord.Interaction):
+        # We handle this in the main View callback to coordinate
+        pass
+
+class ActionView(discord.ui.View):
+    def __init__(self, engine, player, game, is_witch=False):
+        super().__init__(timeout=120)
+        self.engine = engine
+        self.player = player
+        self.game = game
+        self.is_witch = is_witch
+        self.target1 = 0
+        self.target2 = 0
+
+        options = [discord.SelectOption(label="不使用/跳過", value="0")]
+        for n in game.get_alive_numbers():
+            options.append(discord.SelectOption(label=f"{n}號", value=str(n)))
+
+        if is_witch:
+            self.heal_select = ActionSelect(options, "選擇拯救目標 (可選)", "heal")
+            self.poison_select = ActionSelect(options, "選擇毒殺目標 (可選)", "poison")
+            self.add_item(self.heal_select)
+            self.add_item(self.poison_select)
+        else:
+            self.target_select = ActionSelect(options, "選擇目標", "target")
+            self.add_item(self.target_select)
+
+    @discord.ui.button(label="確認行動", style=discord.ButtonStyle.primary, row=2)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.is_witch:
+            self.target1 = int(self.heal_select.values[0]) if self.heal_select.values else 0
+            self.target2 = int(self.poison_select.values[0]) if self.poison_select.values else 0
+            self.engine.night_actions_cache[self.player.number] = (self.target1, self.target2)
+            await interaction.response.send_message(f"你選擇了 救:{self.target1} 毒:{self.target2}。", ephemeral=True)
+        else:
+            self.target1 = int(self.target_select.values[0]) if self.target_select.values else 0
+            self.engine.night_actions_cache[self.player.number] = self.target1
+            await interaction.response.send_message(f"你選擇了 {self.target1} 號作為目標。", ephemeral=True)
+        self.stop()
+
+class VoteView(discord.ui.View):
+    def __init__(self, engine, player, game):
+        super().__init__(timeout=120)
+        self.engine = engine
+        self.player = player
+        self.game = game
+
+        options = [discord.SelectOption(label="棄票", value="0")]
+        for n in game.get_alive_numbers():
+            options.append(discord.SelectOption(label=f"{n}號", value=str(n)))
+
+        self.vote_select = ActionSelect(options, "選擇投票目標", "vote")
+        self.add_item(self.vote_select)
+
+    @discord.ui.button(label="確認投票", style=discord.ButtonStyle.primary, row=1)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        target = int(self.vote_select.values[0]) if self.vote_select.values else 0
+        self.engine.votes[self.player.number] = target
+        await interaction.response.send_message(f"你投票給了 {target} 號。", ephemeral=True)
+        self.stop()
 
 class WolfBot(commands.Bot):
     def __init__(self):
@@ -150,8 +218,8 @@ async def start_game(interaction: discord.Interaction):
     await engine.distribute_roles(roles_dict)
     await engine.start_night()
 
-@bot.tree.command(name="action", description="夜晚行動")
-async def night_action(interaction: discord.Interaction, target1: int, target2: int = 0):
+@bot.tree.command(name="action", description="夜晚行動 (開啟按鈕介面)")
+async def night_action(interaction: discord.Interaction):
     channel_id = interaction.channel_id
     if channel_id not in bot.engines:
         await interaction.response.send_message("沒有進行中的遊戲。", ephemeral=True)
@@ -178,15 +246,9 @@ async def night_action(interaction: discord.Interaction, target1: int, target2: 
         await interaction.response.send_message("女巫請在稍後的單獨階段行動。", ephemeral=True)
         return
 
-    if player.role.name == "女巫":
-        engine.night_actions_cache[player.number] = (target1, target2)
-        await interaction.response.send_message(f"你選擇了 救:{target1} 毒:{target2}。", ephemeral=True)
-    else:
-        if target1 != 0 and target1 not in game.get_alive_numbers():
-             await interaction.response.send_message("無效的目標。", ephemeral=True)
-             return
-        engine.night_actions_cache[player.number] = target1
-        await interaction.response.send_message(f"你選擇了 {target1} 號作為目標。", ephemeral=True)
+    is_witch = player.role.name == "女巫"
+    view = ActionView(engine, player, game, is_witch)
+    await interaction.response.send_message("請選擇你的行動目標：", view=view, ephemeral=True)
 
 @bot.tree.command(name="next", description="推進遊戲階段 (限房主)")
 async def next_phase(interaction: discord.Interaction):
@@ -222,8 +284,8 @@ async def next_phase(interaction: discord.Interaction):
         del bot.engines[channel_id]
         await interaction.followup.send("遊戲已清理。")
 
-@bot.tree.command(name="vote", description="白天投票")
-async def vote(interaction: discord.Interaction, target: int):
+@bot.tree.command(name="vote", description="白天投票 (開啟按鈕介面)")
+async def vote(interaction: discord.Interaction):
     channel_id = interaction.channel_id
     if channel_id not in bot.engines:
         await interaction.response.send_message("沒有進行中的遊戲。", ephemeral=True)
@@ -242,12 +304,8 @@ async def vote(interaction: discord.Interaction, target: int):
         await interaction.response.send_message("你不能投票。", ephemeral=True)
         return
 
-    if target != 0 and target not in game.get_alive_numbers():
-         await interaction.response.send_message("無效的目標。", ephemeral=True)
-         return
-
-    engine.votes[voter.number] = target
-    await interaction.response.send_message(f"你投票給了 {target} 號。", ephemeral=True)
+    view = VoteView(engine, voter, game)
+    await interaction.response.send_message("請選擇你要投票的目標：", view=view, ephemeral=True)
 
 if __name__ == "__main__":
     token = os.getenv("DISCORD_TOKEN")
