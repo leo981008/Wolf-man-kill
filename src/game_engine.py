@@ -166,9 +166,9 @@ class GameEngine:
 
         for target in self.game.night_kills:
             if self.game.witch_heal != target and self.game.guard_protect != target:
-                 dead_tonight.add(target)
+                dead_tonight.add(target)
             elif self.game.witch_heal == target and self.game.guard_protect == target:
-                 dead_tonight.add(target) # 同守同救 = 死
+                dead_tonight.add(target)  # 同守同救 = 死
 
         if self.game.witch_poison:
             dead_tonight.add(self.game.witch_poison)
