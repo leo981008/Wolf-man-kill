@@ -20,7 +20,7 @@ def _get_default_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     try:
         return ImageFont.load_default(size=80)
     except Exception:
-         return ImageFont.load_default()
+        return ImageFont.load_default()
 
 @functools.lru_cache(maxsize=20)
 def _generate_number_image_bytes(number: int) -> bytes:
