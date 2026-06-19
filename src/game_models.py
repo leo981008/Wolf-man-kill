@@ -136,7 +136,7 @@ class GameState:
             del self.players[number]
 
     def get_alive_players(self) -> List[Player]:
-        return [p for p in self.players.values() if p.is_alive and p.role and p.role.faction != Faction.NONE]
+        return [p for p in self.players.values() if p.is_alive and p.role.faction != Faction.NONE]
 
     def get_alive_numbers(self) -> List[int]:
         return [p.number for p in self.get_alive_players()]

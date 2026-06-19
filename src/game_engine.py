@@ -13,7 +13,9 @@ class GameEngine:
         self.game = game_state
         self.ai = ai_manager
         self.votes: Dict[int, int] = {}
-        self.night_actions_cache: Dict[int, int | tuple[int, int]] = {}
+        self.night_actions_cache: Dict[int, int] = {}
+        self.voting_started = False
+        self.pending_hunter = None
 
     async def distribute_roles(self, roles_dict: Dict[str, int]):
         role_list = []
@@ -62,7 +64,7 @@ class GameEngine:
         self.game.guard_protect = None
         self.night_actions_cache.clear()
 
-        await safe_send(self.game.channel, f"**🌙 第 {self.game.day_count} 天夜晚降臨，請所有玩家閉眼。**\n狼人、預言家、守衛請行動。(人類玩家請使用 `/action` 開啟介面，完畢後房主使用 `/next`)")
+        await safe_send(self.game.channel, f"**🌙 第 {self.game.day_count} 天夜晚降臨，請所有玩家閉眼。**\n狼人、預言家、守衛請行動。(人類玩家請使用 `/action 號碼`，完畢後房主使用 `/next`)")
 
         overwrite = discord.PermissionOverwrite(send_messages=False)
         try:
@@ -80,15 +82,17 @@ class GameEngine:
                 context = "\n".join(player.ai_memory) + f"\n存活玩家：{alive_numbers}。"
                 action = await self.ai.generate_night_action(player.role.name, context, alive_numbers)
                 if action:
-                    target = action.get('target')
-                    if target and target in alive_numbers:
+                    target = action.get('target', 0)
+                    if target == 0 or target in alive_numbers:
                         self.night_actions_cache[player.number] = target
                         if player.role.faction == Faction.WOLF:
-                            player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我提議刀 {target} 號。")
+                            if target != 0:
+                                player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我提議刀 {target} 號。")
                         elif isinstance(player.role, Seer):
-                            player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我查驗了 {target} 號。")
+                            if target != 0:
+                                player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我查驗了 {target} 號。")
                         elif isinstance(player.role, Guard):
-                            player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我守護了 {target} 號。")
+                            player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我守護了 {target if target != 0 else '空'}。")
 
     async def resolve_night_phase1_and_start_witch(self):
         # Resolve wolf kill first
@@ -109,7 +113,9 @@ class GameEngine:
             if not player or not player.is_alive:
                 continue
             if isinstance(player.role, Guard):
-                if getattr(player.role, 'last_guarded', None) != target:
+                if target == 0:
+                    player.role.last_guarded = 0
+                elif getattr(player.role, 'last_guarded', None) != target:
                     self.game.guard_protect = target
                     player.role.last_guarded = target
             elif isinstance(player.role, Seer):
@@ -124,7 +130,7 @@ class GameEngine:
 
         self.game.phase = GamePhase.NIGHT_WITCH_PHASE
         self.night_actions_cache.clear() # Clear for witch
-        await safe_send(self.game.channel, "**女巫請睜眼。**\n(人類女巫請使用 `/action` 開啟介面選擇救/毒目標，完畢後房主使用 `/next`)")
+        await safe_send(self.game.channel, "**女巫請睜眼。**\n(人類女巫請使用 `/action 救人號碼 毒人號碼`，不使用填0，完畢後房主使用 `/next`)")
 
         # Process AI Witch
         alive_players = self.game.get_alive_players()
@@ -138,7 +144,7 @@ class GameEngine:
                     heal_target = action.get('heal_target', 0)
                     poison_target = action.get('poison_target', 0)
 
-                    if heal_target == kill_target and player.role.has_heal:
+                    if heal_target != 0 and heal_target == kill_target and player.role.has_heal:
                         self.game.witch_heal = heal_target
                         player.role.has_heal = False
                         player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我救了 {heal_target} 號。")
@@ -152,28 +158,23 @@ class GameEngine:
         # cache key is player_num, value is tuple (heal, poison)
         for player_num, targets in self.night_actions_cache.items():
             player = self.game.players.get(player_num)
-            if not (player and player.is_alive and isinstance(player.role, Witch) and not player.is_ai):
-                continue
-            if not (isinstance(targets, tuple) and len(targets) == 2):
-                logger.warning(f"Invalid witch action cache for player {player_num}: {targets!r}")
-                continue
-
-            heal_target, poison_target = targets
-            kill_target = self.game.night_kills[0] if self.game.night_kills else 0
-            if heal_target == kill_target and player.role.has_heal:
-                self.game.witch_heal = heal_target
-                player.role.has_heal = False
-            if poison_target != 0 and player.role.has_poison:
-                self.game.witch_poison = poison_target
-                player.role.has_poison = False
+            if player and player.is_alive and isinstance(player.role, Witch) and not player.is_ai:
+                heal_target, poison_target = targets
+                kill_target = self.game.night_kills[0] if self.game.night_kills else 0
+                if heal_target != 0 and heal_target == kill_target and player.role.has_heal:
+                    self.game.witch_heal = heal_target
+                    player.role.has_heal = False
+                if poison_target != 0 and player.role.has_poison:
+                    self.game.witch_poison = poison_target
+                    player.role.has_poison = False
 
         dead_tonight = set()
 
         for target in self.game.night_kills:
             if self.game.witch_heal != target and self.game.guard_protect != target:
-                dead_tonight.add(target)
+                 dead_tonight.add(target)
             elif self.game.witch_heal == target and self.game.guard_protect == target:
-                dead_tonight.add(target)  # 同守同救 = 死
+                 dead_tonight.add(target) # 同守同救 = 死
 
         if self.game.witch_poison:
             dead_tonight.add(self.game.witch_poison)
@@ -186,7 +187,7 @@ class GameEngine:
                 if isinstance(player.role, Hunter) and p_num == self.game.witch_poison:
                     player.role.can_shoot = False
                 if self.game.day_count == 1:
-                    player.has_last_words = True
+                     player.has_last_words = True
                 death_messages.append(f"{p_num}號玩家")
 
         self.game.phase = GamePhase.DAY
@@ -199,9 +200,9 @@ class GameEngine:
 
         msg = f"**☀️ 第 {self.game.day_count} 天白天降臨。**\n"
         if death_messages:
-            msg += f"昨晚死亡的是：{', '.join(death_messages)}。"
+             msg += f"昨晚死亡的是：{', '.join(death_messages)}。"
         else:
-            msg += "昨晚是平安夜。"
+             msg += "昨晚是平安夜。"
 
         # Add to everyone's memory
         for p in self.game.players.values():
@@ -247,8 +248,9 @@ class GameEngine:
 
     async def start_voting(self):
         self.votes.clear()
+        self.voting_started = True
         alive_numbers = self.game.get_alive_numbers()
-        await safe_send(self.game.channel, f"**開始投票**\n存活玩家：{alive_numbers}\n(人類玩家請使用 `/vote` 開啟介面投票，全數投完後房主使用 `/next`)")
+        await safe_send(self.game.channel, f"**開始投票**\n存活玩家：{alive_numbers}\n(人類玩家請使用 `/vote 號碼` 投票，全數投完後房主使用 `/next`)")
         await self._process_ai_votes()
 
     async def _process_ai_votes(self):
@@ -264,6 +266,7 @@ class GameEngine:
                     player.ai_memory.append(f"我投票給了 {target} 號。")
 
     async def resolve_votes(self):
+        self.voting_started = False
         if not self.votes:
             await safe_send(self.game.channel, "無人投票，平安日。")
             await self.start_night()
@@ -318,6 +321,36 @@ class GameEngine:
                     await self._end_game(winner)
                 else:
                     await self.start_night()
+
+
+    async def resolve_hunter_shoot(self, target: int):
+        if not self.pending_hunter:
+            return
+
+        hunter_player = self.pending_hunter
+        self.pending_hunter = None
+
+        target_player = self.game.players.get(target)
+        if target_player and target_player.is_alive and hunter_player.role.can_shoot:
+            target_player.is_alive = False
+            msg = f"**{hunter_player.number}號 (獵人)** 開槍帶走了 **{target}號**！"
+            await safe_send(self.game.channel, msg)
+            for p in self.game.players.values():
+                if p.is_ai:
+                    p.ai_memory.append(msg)
+
+            winner = self.game.check_game_over()
+            if winner:
+                await self._end_game(winner)
+                return
+        else:
+            await safe_send(self.game.channel, f"**{hunter_player.number}號 (獵人)** 放棄開槍或無效目標。")
+
+        # Continue game
+        if self.game.phase == GamePhase.DAY:
+            await self.start_night()
+        else:
+            await self.start_day()
 
     async def _end_game(self, winner: Faction):
         self.game.phase = GamePhase.ENDED
