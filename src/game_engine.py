@@ -194,9 +194,9 @@ class GameEngine:
 
         msg = f"**☀️ 第 {self.game.day_count} 天白天降臨。**\n"
         if death_messages:
-             msg += f"昨晚死亡的是：{', '.join(death_messages)}。"
+            msg += f"昨晚死亡的是：{', '.join(death_messages)}。"
         else:
-             msg += "昨晚是平安夜。"
+            msg += "昨晚是平安夜。"
 
         # Add to everyone's memory
         for p in self.game.players.values():
