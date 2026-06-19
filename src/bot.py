@@ -200,7 +200,19 @@ async def start_game(interaction: discord.Interaction):
         dynamic_roles = await bot.ai.decide_roles_for_players(player_count, all_roles)
 
         if dynamic_roles:
+            invalid_roles = [k for k in dynamic_roles.keys() if k not in all_roles]
+            invalid_counts = [k for k, v in dynamic_roles.items() if not isinstance(v, int) or v < 0]
+            if invalid_roles or invalid_counts:
+                await safe_send(interaction.channel, f"AI 配置格式不正確，遊戲取消。(invalid_roles={invalid_roles}, invalid_counts={invalid_counts})")
+                del bot.games[channel_id]
+                return
+
             total_assigned = sum(dynamic_roles.values())
+            if total_assigned > player_count:
+                await safe_send(interaction.channel, f"AI 配置總人數超過玩家數 ({total_assigned} > {player_count})，遊戲取消。")
+                del bot.games[channel_id]
+                return
+
             roles_dict = dynamic_roles
             if total_assigned < player_count:
                 roles_dict["旁觀天神"] = player_count - total_assigned
