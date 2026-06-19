@@ -152,15 +152,20 @@ class GameEngine:
         # cache key is player_num, value is tuple (heal, poison)
         for player_num, targets in self.night_actions_cache.items():
             player = self.game.players.get(player_num)
-            if player and player.is_alive and isinstance(player.role, Witch) and not player.is_ai:
-                heal_target, poison_target = targets
-                kill_target = self.game.night_kills[0] if self.game.night_kills else 0
-                if heal_target == kill_target and player.role.has_heal:
-                    self.game.witch_heal = heal_target
-                    player.role.has_heal = False
-                if poison_target != 0 and player.role.has_poison:
-                    self.game.witch_poison = poison_target
-                    player.role.has_poison = False
+            if not (player and player.is_alive and isinstance(player.role, Witch) and not player.is_ai):
+                continue
+            if not (isinstance(targets, tuple) and len(targets) == 2):
+                logger.warning(f"Invalid witch action cache for player {player_num}: {targets!r}")
+                continue
+
+            heal_target, poison_target = targets
+            kill_target = self.game.night_kills[0] if self.game.night_kills else 0
+            if heal_target == kill_target and player.role.has_heal:
+                self.game.witch_heal = heal_target
+                player.role.has_heal = False
+            if poison_target != 0 and player.role.has_poison:
+                self.game.witch_poison = poison_target
+                player.role.has_poison = False
 
         dead_tonight = set()
 
