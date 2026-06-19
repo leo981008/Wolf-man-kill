@@ -243,7 +243,7 @@ class GameEngine:
     async def start_voting(self):
         self.votes.clear()
         alive_numbers = self.game.get_alive_numbers()
-        await safe_send(self.game.channel, f"**開始投票**\n存活玩家：{alive_numbers}\n(人類玩家請使用 `/vote 號碼` 投票，全數投完後房主使用 `/next`)")
+        await safe_send(self.game.channel, f"**開始投票**\n存活玩家：{alive_numbers}\n(人類玩家請使用 `/vote` 開啟介面投票，全數投完後房主使用 `/next`)")
         await self._process_ai_votes()
 
     async def _process_ai_votes(self):
