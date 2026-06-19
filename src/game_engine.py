@@ -124,7 +124,7 @@ class GameEngine:
 
         self.game.phase = GamePhase.NIGHT_WITCH_PHASE
         self.night_actions_cache.clear() # Clear for witch
-        await safe_send(self.game.channel, "**女巫請睜眼。**\n(人類女巫請使用 `/action 救人號碼 毒人號碼`，不使用填0，完畢後房主使用 `/next`)")
+        await safe_send(self.game.channel, "**女巫請睜眼。**\n(人類女巫請使用 `/action` 開啟介面選擇救/毒目標，完畢後房主使用 `/next`)")
 
         # Process AI Witch
         alive_players = self.game.get_alive_players()
