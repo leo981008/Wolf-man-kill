@@ -62,7 +62,7 @@ class GameEngine:
         self.game.guard_protect = None
         self.night_actions_cache.clear()
 
-        await safe_send(self.game.channel, f"**🌙 第 {self.game.day_count} 天夜晚降臨，請所有玩家閉眼。**\n狼人、預言家、守衛請行動。(人類玩家請使用 `/action 號碼`，完畢後房主使用 `/next`)")
+        await safe_send(self.game.channel, f"**🌙 第 {self.game.day_count} 天夜晚降臨，請所有玩家閉眼。**\n狼人、預言家、守衛請行動。(人類玩家請使用 `/action` 開啟介面，完畢後房主使用 `/next`)")
 
         overwrite = discord.PermissionOverwrite(send_messages=False)
         try:
