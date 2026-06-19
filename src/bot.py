@@ -28,8 +28,7 @@ class ActionSelect(discord.ui.Select):
         super().__init__(placeholder=placeholder, options=options, custom_id=custom_id)
 
     async def callback(self, interaction: discord.Interaction):
-        # We handle this in the main View callback to coordinate
-        pass
+        await interaction.response.defer()
 
 class ActionView(discord.ui.View):
     def __init__(self, engine, player, game, is_witch=False):
