@@ -181,7 +181,7 @@ class GameEngine:
                 if isinstance(player.role, Hunter) and p_num == self.game.witch_poison:
                     player.role.can_shoot = False
                 if self.game.day_count == 1:
-                     player.has_last_words = True
+                    player.has_last_words = True
                 death_messages.append(f"{p_num}號玩家")
 
         self.game.phase = GamePhase.DAY
