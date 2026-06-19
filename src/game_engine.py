@@ -7,6 +7,7 @@ import discord
 from src.game_models import GameState, GamePhase, Player, Faction, ROLE_MAPPING, Witch, Guard, Hunter, Seer, Idiot
 from src.ai_manager import AIManager
 from src.utils import logger, safe_send, gather_safe_sends, generate_number_image_file
+from src.ui_components import ActionButtonsView, WitchActionSelectView, VoteButtonsView, EndSpeechView
 
 class GameEngine:
     def __init__(self, game_state: GameState, ai_manager: AIManager):
@@ -16,6 +17,10 @@ class GameEngine:
         self.night_actions_cache: Dict[int, int] = {}
         self.voting_started = False
         self.pending_hunter = None
+        self.human_actions_completed = 0
+        self.expected_human_actions = 0
+        self.human_votes_completed = 0
+        self.expected_human_votes = 0
 
     async def distribute_roles(self, roles_dict: Dict[str, int]):
         role_list = []
@@ -63,8 +68,10 @@ class GameEngine:
         self.game.witch_poison = None
         self.game.guard_protect = None
         self.night_actions_cache.clear()
+        self.human_actions_completed = 0
+        self.expected_human_actions = 0
 
-        await safe_send(self.game.channel, f"**🌙 第 {self.game.day_count} 天夜晚降臨，請所有玩家閉眼。**\n狼人、預言家、守衛請行動。(人類玩家請使用 `/action 號碼`，完畢後房主使用 `/next`)")
+        await safe_send(self.game.channel, f"**🌙 第 {self.game.day_count} 天夜晚降臨，請所有玩家閉眼。**\n狼人、預言家、守衛請行動。(請在私訊中選擇行動，限時 60 秒)")
 
         overwrite = discord.PermissionOverwrite(send_messages=False)
         try:
@@ -72,7 +79,30 @@ class GameEngine:
         except Exception:
             pass
 
+        completion_event = asyncio.Event()
+
+        alive_players = self.game.get_alive_players()
+        human_tasks = []
+        for player in alive_players:
+            if not player.is_ai and not isinstance(player.role, Witch) and player.role.faction != Faction.VILLAGER and player.role.faction != Faction.NONE:
+                self.expected_human_actions += 1
+                view = ActionButtonsView(self, player, self.game, completion_event)
+                human_tasks.append(safe_send(player.user, "請選擇你的行動目標：", view=view))
+
+        if human_tasks:
+            await gather_safe_sends(human_tasks)
+
+        if self.expected_human_actions == 0:
+            completion_event.set()
+
         await self._process_ai_night_actions_phase1()
+
+        try:
+            await asyncio.wait_for(completion_event.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            pass
+
+        await self.resolve_night_phase1_and_start_witch()
 
     async def _process_ai_night_actions_phase1(self):
         alive_players = self.game.get_alive_players()
@@ -130,10 +160,25 @@ class GameEngine:
 
         self.game.phase = GamePhase.NIGHT_WITCH_PHASE
         self.night_actions_cache.clear() # Clear for witch
-        await safe_send(self.game.channel, "**女巫請睜眼。**\n(人類女巫請使用 `/action 救人號碼 毒人號碼`，不使用填0，完畢後房主使用 `/next`)")
+        await safe_send(self.game.channel, "**女巫請睜眼。**\n(請在私訊中選擇行動，限時 60 秒)")
+
+        completion_event = asyncio.Event()
+
+        alive_players = self.game.get_alive_players()
+        has_human_witch = False
+
+        for player in alive_players:
+            if not player.is_ai and isinstance(player.role, Witch):
+                has_human_witch = True
+                view = WitchActionSelectView(self, player, self.game, completion_event)
+                kill_target = self.game.night_kills[0] if self.game.night_kills else "無"
+                msg = f"請選擇你的行動。\n今晚倒牌的是 {kill_target} 號。\n解藥：{'可用' if player.role.has_heal else '已用'}。毒藥：{'可用' if player.role.has_poison else '已用'}。"
+                await safe_send(player.user, msg, view=view)
+
+        if not has_human_witch:
+            completion_event.set()
 
         # Process AI Witch
-        alive_players = self.game.get_alive_players()
         alive_numbers = self.game.get_alive_numbers()
         for player in alive_players:
             if player.is_ai and isinstance(player.role, Witch):
@@ -152,6 +197,13 @@ class GameEngine:
                         self.game.witch_poison = poison_target
                         player.role.has_poison = False
                         player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我毒了 {poison_target} 號。")
+
+        try:
+            await asyncio.wait_for(completion_event.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            pass
+
+        await self.resolve_night_final()
 
     async def resolve_night_final(self):
         # Process Human witch if any was cached in night_actions_cache
@@ -223,35 +275,73 @@ class GameEngine:
         random.shuffle(order)
         order_str = ' -> '.join([str(n) for n in order])
 
-        msg = f"**發言階段開始**\n發言順序為：{order_str}\n(AI 玩家會自動發言。人類玩家請直接在頻道發言。發言完畢或進行投票請房主使用 `/next`)"
+        msg = f"**發言階段開始**\n發言順序為：{order_str}\n(依照順序輪流發言，人類玩家發言完畢請點擊結束按鈕，限時 60 秒)"
         await safe_send(self.game.channel, msg)
 
         for p in self.game.players.values():
             if p.is_ai:
                 p.ai_memory.append(f"發言順序：{order_str}")
 
-        await self._process_ai_day_speeches(order)
+        await self._process_day_speeches(order)
 
-    async def _process_ai_day_speeches(self, order: List[int]):
+    async def _process_day_speeches(self, order: List[int]):
         for p_num in order:
             player = self.game.players.get(p_num)
-            if player and player.is_alive and player.is_ai:
-                context = "\n".join(player.ai_memory[-10:]) + f"\n存活玩家：{self.game.get_alive_numbers()}。"
-                history = "\n".join(self.game.speech_history[-15:])
-                speech = await self.ai.generate_day_speech(player.role.name, player.number, context, history)
-                if speech:
-                    msg = f"**[AI {player.number}號]**: {speech}"
-                    await safe_send(self.game.channel, msg)
-                    self.game.speech_history.append(f"{player.number}號: {speech}")
-                    player.ai_memory.append(f"我發表了言論：{speech}")
-                await asyncio.sleep(2)
+            if player and player.is_alive:
+                if player.is_ai:
+                    await safe_send(self.game.channel, f"現在輪到 **{player.number}號 (AI)** 發言...")
+                    context = "\n".join(player.ai_memory[-10:]) + f"\n存活玩家：{self.game.get_alive_numbers()}。"
+                    history = "\n".join(self.game.speech_history[-15:])
+                    speech = await self.ai.generate_day_speech(player.role.name, player.number, context, history)
+                    if speech:
+                        msg = f"**[AI {player.number}號]**: {speech}"
+                        await safe_send(self.game.channel, msg)
+                        self.game.speech_history.append(f"{player.number}號: {speech}")
+                        player.ai_memory.append(f"我發表了言論：{speech}")
+                    await asyncio.sleep(2)
+                else:
+                    completion_event = asyncio.Event()
+                    view = EndSpeechView(completion_event, player.user.id)
+                    await safe_send(self.game.channel, f"現在輪到 {player.user.mention} (**{player.number}號**) 發言！請直接在頻道打字。(限時 60 秒，發言完畢請點擊按鈕)", view=view)
+
+                    try:
+                        await asyncio.wait_for(completion_event.wait(), timeout=60.0)
+                    except asyncio.TimeoutError:
+                        await safe_send(self.game.channel, f"**{player.number}號** 發言時間已到。")
+
+        await self.start_voting()
 
     async def start_voting(self):
         self.votes.clear()
         self.voting_started = True
+        self.human_votes_completed = 0
+        self.expected_human_votes = 0
         alive_numbers = self.game.get_alive_numbers()
-        await safe_send(self.game.channel, f"**開始投票**\n存活玩家：{alive_numbers}\n(人類玩家請使用 `/vote 號碼` 投票，全數投完後房主使用 `/next`)")
+        await safe_send(self.game.channel, f"**開始投票**\n存活玩家：{alive_numbers}\n(請在私訊中選擇投票對象，限時 60 秒)")
+
+        completion_event = asyncio.Event()
+        human_tasks = []
+        alive_players = self.game.get_alive_players()
+        for player in alive_players:
+            if not player.is_ai:
+                self.expected_human_votes += 1
+                view = VoteButtonsView(self, player, self.game, completion_event)
+                human_tasks.append(safe_send(player.user, "請選擇你要投票的目標：", view=view))
+
+        if human_tasks:
+            await gather_safe_sends(human_tasks)
+
+        if self.expected_human_votes == 0:
+            completion_event.set()
+
         await self._process_ai_votes()
+
+        try:
+            await asyncio.wait_for(completion_event.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            pass
+
+        await self.resolve_votes()
 
     async def _process_ai_votes(self):
         alive_players = self.game.get_alive_players()
