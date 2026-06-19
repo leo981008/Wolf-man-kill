@@ -13,7 +13,7 @@ class GameEngine:
         self.game = game_state
         self.ai = ai_manager
         self.votes: Dict[int, int] = {}
-        self.night_actions_cache: Dict[int, int] = {}
+        self.night_actions_cache: Dict[int, int | tuple[int, int]] = {}
 
     async def distribute_roles(self, roles_dict: Dict[str, int]):
         role_list = []
