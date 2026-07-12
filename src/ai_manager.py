@@ -6,33 +6,71 @@ from typing import Dict, Any, List, Optional
 from src.utils import logger
 
 class AIManager:
-    def __init__(self, host: str = None, model: str = "gemma4:latest"):
-        self.host = host or os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        self.model = model
-        self.api_url = f"{self.host}/api/generate"
+    def __init__(self, host: str = None, model: str = None):
+        self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
+        if self.nvidia_api_key:
+            self.mode = "nvidia"
+            self.model = model or os.getenv("NVIDIA_MODEL", "meta/llama-3.1-70b-instruct")
+            self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+        else:
+            self.mode = "ollama"
+            self.host = host or os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            self.model = model or "gemma4:latest"
+            self.api_url = f"{self.host}/api/generate"
+            
         self._json_object_pattern = re.compile(r'\{.*?\}', re.DOTALL)
         self._json_array_pattern = re.compile(r'\[.*\]', re.DOTALL)
 
     async def _generate(self, prompt: str, system: str = "") -> Optional[str]:
-        payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "system": system,
-            "stream": False
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.api_url, json=payload, timeout=60) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data.get("response", "")
-                    else:
-                        text = await response.text()
-                        logger.error(f"Ollama API error ({response.status}): {text}")
-                        return None
-        except Exception as e:
-            logger.error(f"Error connecting to Ollama: {e}")
-            return None
+        if self.mode == "nvidia":
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.5,
+                "max_tokens": 1024
+            }
+            headers = {
+                "Authorization": f"Bearer {self.nvidia_api_key}",
+                "Content-Type": "application/json"
+            }
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(self.api_url, json=payload, headers=headers, timeout=60) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            if data.get("choices") and len(data["choices"]) > 0:
+                                return data["choices"][0].get("message", {}).get("content", "")
+                            return ""
+                        else:
+                            text = await response.text()
+                            logger.error(f"NVIDIA API error ({response.status}): {text}")
+                            return None
+            except Exception as e:
+                logger.error(f"Error connecting to NVIDIA API: {e}")
+                return None
+        else:
+            payload = {
+                "model": self.model,
+                "prompt": prompt,
+                "system": system,
+                "stream": False
+            }
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(self.api_url, json=payload, timeout=60) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            return data.get("response", "")
+                        else:
+                            text = await response.text()
+                            logger.error(f"Ollama API error ({response.status}): {text}")
+                            return None
+            except Exception as e:
+                logger.error(f"Error connecting to Ollama: {e}")
+                return None
 
     def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
         match = self._json_object_pattern.search(text)

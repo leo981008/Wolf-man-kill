@@ -1,6 +1,6 @@
 # Wolf-man-kill (狼人殺 Discord Bot)
 
-一個基於 `discord.py` 開發的非同步多人狼人殺 Discord 機器人。本專案支援真人玩家與 AI 虛擬玩家（基於 Ollama 大語言模型）混合對局，具備全自動的日夜流程切換、發言佇列控制，並能在遊戲開始時自動透過 Pillow 生成專屬數字頭像私訊玩家。
+一個基於 `discord.py` 開發的非同步多人狼人殺 Discord 機器人。本專案支援真人玩家與 AI 虛擬玩家（支援 Ollama 或 NVIDIA API 的大語言模型）混合對局，具備全自動的日夜流程切換、發言佇列控制，並能在遊戲開始時自動透過 Pillow 生成專屬數字頭像私訊玩家。
 
 ---
 
@@ -34,7 +34,7 @@ Wolf-man-kill/
 │   ├── bot.py                # Discord Bot 進入點，定義 Slash 指令與日夜遊戲流程
 │   ├── game_engine.py        # 遊戲引擎核心，處理遊戲邏輯、死亡結算與勝負判定
 │   ├── game_models.py        # 狀態資料結構（GameState）、玩家清單與 AIPlayer 鴨子型別
-│   ├── ai_manager.py         # 大語言模型（Ollama）連接層，封裝非同步 API 與快取機制
+│   ├── ai_manager.py         # 大語言模型（Ollama / NVIDIA API）連接層，封裝非同步 API 與快取機制
 │   └── utils.py              # Logger 與輔助工具
 ├── tests/                    # 單元測試目錄
 │   ├── conftest.py           # 測試用的 fixtures 配置
@@ -93,19 +93,29 @@ cp .env.example .env
 
 打開 `.env` 檔案並填寫：
 ```env
+# Discord 機器人 Bot Token (必填)
 DISCORD_TOKEN=your_discord_token_here
+
+# Ollama 伺服器網址 (預設為 http://localhost:11434)
 OLLAMA_HOST=http://localhost:11434
+
+# NVIDIA API 設定 (選填，若填入 API Key 則會優先採用 NVIDIA API 運行 AI 玩家)
+NVIDIA_API_KEY=your_nvidia_api_key_here
+NVIDIA_MODEL=meta/llama-3.1-70b-instruct
 ```
 
 ---
 
 ## 啟動與執行
 
-1. **啟動 Ollama 服務**：
-   確保您的 Ollama 正在運行，並且已經拉取了對應的模型（預設使用 `gemma4:latest`，亦可在 `src/ai_manager.py` 的建構子中修改模型名稱）：
-   ```bash
-   ollama pull gemma4:latest
-   ```
+1. **啟動 AI 服務**：
+   * **選項 A：使用 Ollama (本機運行)**
+     確保您的 Ollama 正在運行，並且已經拉取了對應的模型（預設使用 `gemma4:latest`，亦可在 `src/ai_manager.py` 的建構子中修改模型名稱）：
+     ```bash
+     ollama pull gemma4:latest
+     ```
+   * **選項 B：使用 NVIDIA API (雲端服務)**
+     若您在 `.env` 中設定了 `NVIDIA_API_KEY`，系統將自動優先使用 NVIDIA API，您不需在本地啟動 Ollama。
 
 2. **啟動 Discord 機器人**：
    在專案根目錄下，執行以下命令：

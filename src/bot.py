@@ -22,6 +22,69 @@ STANDARD_TEMPLATES = {
 
 
 
+class ActionSelect(discord.ui.Select):
+    def __init__(self, options, placeholder, custom_id):
+        super().__init__(placeholder=placeholder, options=options, custom_id=custom_id)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+class ActionView(discord.ui.View):
+    def __init__(self, engine, player, game, is_witch=False):
+        super().__init__(timeout=120)
+        self.engine = engine
+        self.player = player
+        self.game = game
+        self.is_witch = is_witch
+        self.target1 = 0
+        self.target2 = 0
+
+        options = [discord.SelectOption(label="不使用/跳過", value="0")]
+        for n in game.get_alive_numbers():
+            options.append(discord.SelectOption(label=f"{n}號", value=str(n)))
+
+        if is_witch:
+            self.heal_select = ActionSelect(options, "選擇拯救目標 (可選)", "heal")
+            self.poison_select = ActionSelect(options, "選擇毒殺目標 (可選)", "poison")
+            self.add_item(self.heal_select)
+            self.add_item(self.poison_select)
+        else:
+            self.target_select = ActionSelect(options, "選擇目標", "target")
+            self.add_item(self.target_select)
+
+    @discord.ui.button(label="確認行動", style=discord.ButtonStyle.primary, row=2)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.is_witch:
+            self.target1 = int(self.heal_select.values[0]) if self.heal_select.values else 0
+            self.target2 = int(self.poison_select.values[0]) if self.poison_select.values else 0
+            self.engine.night_actions_cache[self.player.number] = (self.target1, self.target2)
+            await interaction.response.send_message(f"你選擇了 救:{self.target1} 毒:{self.target2}。", ephemeral=True)
+        else:
+            self.target1 = int(self.target_select.values[0]) if self.target_select.values else 0
+            self.engine.night_actions_cache[self.player.number] = self.target1
+            await interaction.response.send_message(f"你選擇了 {self.target1} 號作為目標。", ephemeral=True)
+        self.stop()
+
+class VoteView(discord.ui.View):
+    def __init__(self, engine, player, game):
+        super().__init__(timeout=120)
+        self.engine = engine
+        self.player = player
+        self.game = game
+
+        options = [discord.SelectOption(label="棄票", value="0")]
+        for n in game.get_alive_numbers():
+            options.append(discord.SelectOption(label=f"{n}號", value=str(n)))
+
+        self.vote_select = ActionSelect(options, "選擇投票目標", "vote")
+        self.add_item(self.vote_select)
+
+    @discord.ui.button(label="確認投票", style=discord.ButtonStyle.primary, row=1)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        target = int(self.vote_select.values[0]) if self.vote_select.values else 0
+        self.engine.votes[self.player.number] = target
+        await interaction.response.send_message(f"你投票給了 {target} 號。", ephemeral=True)
+        self.stop()
 
 class WolfBot(commands.Bot):
     def __init__(self):
