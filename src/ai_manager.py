@@ -6,6 +6,13 @@ from typing import Dict, Any, List, Optional
 from src.utils import logger
 
 class AIManager:
+    def _clean_text(self, text: str) -> str:
+        """Remove <think>...</think> tags and their contents from the generated text."""
+        if not text:
+            return text
+        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        return cleaned.strip()
+
     def __init__(self, host: str = None, model: str = None):
         self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
         if self.nvidia_api_key:
@@ -42,7 +49,8 @@ class AIManager:
                         if response.status == 200:
                             data = await response.json()
                             if data.get("choices") and len(data["choices"]) > 0:
-                                return data["choices"][0].get("message", {}).get("content", "")
+                                content = data["choices"][0].get("message", {}).get("content", "")
+                                return self._clean_text(content)
                             return ""
                         else:
                             text = await response.text()
@@ -63,7 +71,7 @@ class AIManager:
                     async with session.post(self.api_url, json=payload, timeout=60) as response:
                         if response.status == 200:
                             data = await response.json()
-                            return data.get("response", "")
+                            return self._clean_text(data.get("response", ""))
                         else:
                             text = await response.text()
                             logger.error(f"Ollama API error ({response.status}): {text}")
@@ -127,6 +135,7 @@ class AIManager:
             f"你在玩狼人殺，你的編號是 {player_number} 號，你的身分是【{role}】。\n"
             "現在是白天發言時間，請根據你昨晚的行動結果、你的個人記憶、白天的死訊以及其他玩家的發言，發表你的看法。\n"
             "請表現得像一個真實的玩家，你可以偽裝、質疑他人，或是分享你的邏輯推理。\n"
+            "請控制發言在 100 字以內。\n"
             "請直接輸出你的發言內容，不需要 JSON 格式，也不要加上引號或其他前綴。"
         )
         prompt = f"目前遊戲狀態與你的記憶：\n{context}\n\n之前的發言紀錄：\n{history}\n\n請開始你的發言："

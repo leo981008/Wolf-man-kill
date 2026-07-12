@@ -95,34 +95,43 @@ class GameEngine:
         if self.expected_human_actions == 0:
             completion_event.set()
 
-        await self._process_ai_night_actions_phase1()
+        ai_task = asyncio.create_task(self._process_ai_night_actions_phase1())
 
         try:
             await asyncio.wait_for(completion_event.wait(), timeout=60.0)
         except asyncio.TimeoutError:
             pass
 
+        await ai_task
         await self.resolve_night_phase1_and_start_witch()
 
     async def _process_ai_night_actions_phase1(self):
         alive_players = self.game.get_alive_players()
         alive_numbers = self.game.get_alive_numbers()
+
+        async def process_ai(player):
+            context = "\n".join(player.ai_memory) + f"\n存活玩家：{alive_numbers}。"
+            action = await self.ai.generate_night_action(player.role.name, context, alive_numbers)
+            if action:
+                target = action.get('target', 0)
+                if target == 0 or target in alive_numbers:
+                    self.night_actions_cache[player.number] = target
+                    if player.role.faction == Faction.WOLF:
+                        if target != 0:
+                            player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我提議刀 {target} 號。")
+                    elif isinstance(player.role, Seer):
+                        if target != 0:
+                            player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我查驗了 {target} 號。")
+                    elif isinstance(player.role, Guard):
+                        player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我守護了 {target if target != 0 else '空'}。")
+
+        tasks = []
         for player in alive_players:
             if player.is_ai and not isinstance(player.role, Witch) and player.role.faction != Faction.VILLAGER and player.role.faction != Faction.NONE:
-                context = "\n".join(player.ai_memory) + f"\n存活玩家：{alive_numbers}。"
-                action = await self.ai.generate_night_action(player.role.name, context, alive_numbers)
-                if action:
-                    target = action.get('target', 0)
-                    if target == 0 or target in alive_numbers:
-                        self.night_actions_cache[player.number] = target
-                        if player.role.faction == Faction.WOLF:
-                            if target != 0:
-                                player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我提議刀 {target} 號。")
-                        elif isinstance(player.role, Seer):
-                            if target != 0:
-                                player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我查驗了 {target} 號。")
-                        elif isinstance(player.role, Guard):
-                            player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我守護了 {target if target != 0 else '空'}。")
+                tasks.append(process_ai(player))
+
+        if tasks:
+            await asyncio.gather(*tasks)
 
     async def resolve_night_phase1_and_start_witch(self):
         # Resolve wolf kill first
@@ -180,28 +189,38 @@ class GameEngine:
 
         # Process AI Witch
         alive_numbers = self.game.get_alive_numbers()
+        kill_target = self.game.night_kills[0] if self.game.night_kills else 0
+
+        async def process_ai_witch(player):
+            context = "\n".join(player.ai_memory) + f"\n存活玩家：{alive_numbers}。今晚倒牌的是 {kill_target} 號。\n解藥：{'可用' if player.role.has_heal else '已用'}。毒藥：{'可用' if player.role.has_poison else '已用'}。"
+            action = await self.ai.generate_witch_action(context, alive_numbers)
+            if action:
+                heal_target = action.get('heal_target', 0)
+                poison_target = action.get('poison_target', 0)
+
+                if heal_target != 0 and heal_target == kill_target and player.role.has_heal:
+                    self.game.witch_heal = heal_target
+                    player.role.has_heal = False
+                    player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我救了 {heal_target} 號。")
+                if poison_target in alive_numbers and player.role.has_poison:
+                    self.game.witch_poison = poison_target
+                    player.role.has_poison = False
+                    player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我毒了 {poison_target} 號。")
+
+        ai_tasks = []
         for player in alive_players:
             if player.is_ai and isinstance(player.role, Witch):
-                kill_target = self.game.night_kills[0] if self.game.night_kills else 0
-                context = "\n".join(player.ai_memory) + f"\n存活玩家：{alive_numbers}。今晚倒牌的是 {kill_target} 號。\n解藥：{'可用' if player.role.has_heal else '已用'}。毒藥：{'可用' if player.role.has_poison else '已用'}。"
-                action = await self.ai.generate_witch_action(context, alive_numbers)
-                if action:
-                    heal_target = action.get('heal_target', 0)
-                    poison_target = action.get('poison_target', 0)
+                ai_tasks.append(process_ai_witch(player))
 
-                    if heal_target != 0 and heal_target == kill_target and player.role.has_heal:
-                        self.game.witch_heal = heal_target
-                        player.role.has_heal = False
-                        player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我救了 {heal_target} 號。")
-                    if poison_target in alive_numbers and player.role.has_poison:
-                        self.game.witch_poison = poison_target
-                        player.role.has_poison = False
-                        player.ai_memory.append(f"第 {self.game.day_count} 天夜晚，我毒了 {poison_target} 號。")
+        ai_witch_task = asyncio.create_task(asyncio.gather(*ai_tasks)) if ai_tasks else None
 
         try:
             await asyncio.wait_for(completion_event.wait(), timeout=60.0)
         except asyncio.TimeoutError:
             pass
+
+        if ai_witch_task:
+            await ai_witch_task
 
         await self.resolve_night_final()
 
@@ -334,26 +353,35 @@ class GameEngine:
         if self.expected_human_votes == 0:
             completion_event.set()
 
-        await self._process_ai_votes()
+        ai_vote_task = asyncio.create_task(self._process_ai_votes())
 
         try:
             await asyncio.wait_for(completion_event.wait(), timeout=60.0)
         except asyncio.TimeoutError:
             pass
 
+        await ai_vote_task
         await self.resolve_votes()
 
     async def _process_ai_votes(self):
         alive_players = self.game.get_alive_players()
         alive_numbers = self.game.get_alive_numbers()
+
+        async def process_vote(player):
+            context = "\n".join(player.ai_memory[-5:]) + f"\n第 {self.game.day_count} 天投票。存活：{alive_numbers}。發言紀錄：\n" + "\n".join(self.game.speech_history[-10:])
+            target = await self.ai.generate_vote(player.role.name, player.number, context, alive_numbers)
+            if target is not None:
+                self.votes[player.number] = target
+                await safe_send(self.game.channel, f"AI {player.number}號 已投票。")
+                player.ai_memory.append(f"我投票給了 {target} 號。")
+
+        tasks = []
         for player in alive_players:
             if player.is_ai:
-                context = "\n".join(player.ai_memory[-5:]) + f"\n第 {self.game.day_count} 天投票。存活：{alive_numbers}。發言紀錄：\n" + "\n".join(self.game.speech_history[-10:])
-                target = await self.ai.generate_vote(player.role.name, player.number, context, alive_numbers)
-                if target is not None:
-                    self.votes[player.number] = target
-                    await safe_send(self.game.channel, f"AI {player.number}號 已投票。")
-                    player.ai_memory.append(f"我投票給了 {target} 號。")
+                tasks.append(process_vote(player))
+
+        if tasks:
+            await asyncio.gather(*tasks)
 
     async def resolve_votes(self):
         self.voting_started = False
